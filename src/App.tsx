@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { BusinessInfo, CatalogSettings, Product, Catalog } from './types';
 import BusinessSettings from './components/BusinessSettings';
 import ProductUploader from './components/ProductUploader';
@@ -8,6 +8,7 @@ import PdfExportModal from './components/PdfExportModal';
 import SellerPortal from './components/SellerPortal';
 import { useAuth } from './context/AuthContext';
 import { loadInitialStoreProfile, saveStoreProfile } from './utils/storeProfile';
+import './firebase';
 import {
   Sparkles,
   Share2,
@@ -34,6 +35,10 @@ import {
   LogOut,
   User,
   ShieldCheck,
+  CheckCircle2,
+  CloudCheck,
+  Save,
+  AlertCircle,
 } from 'lucide-react';
 
 const DEFAULT_BUSINESS: BusinessInfo = {
@@ -112,7 +117,7 @@ const PRESET_PRODUCTS: Product[] = [
 type MobileTab = 'store' | 'upload' | 'products' | 'preview';
 
 export default function App() {
-  const { seller, isLoading: isAuthLoading, logout } = useAuth();
+  const { seller, token, isLoading: isAuthLoading, logout } = useAuth();
 
   const [business, setBusiness] = useState<BusinessInfo>(DEFAULT_BUSINESS);
   const [settings, setSettings] = useState<CatalogSettings>(DEFAULT_SETTINGS);
@@ -125,6 +130,12 @@ export default function App() {
   const [isCustomerView, setIsCustomerView] = useState(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
 
+  // Persistence & Save status states
+  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error' | 'idle'>('saved');
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [isCatalogLoadedForSeller, setIsCatalogLoadedForSeller] = useState(false);
+  const isInitialMount = useRef(true);
+
   // Share Modal / Deployed link state
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -132,15 +143,52 @@ export default function App() {
   const [copied, setCopied] = useState(false);
   const [isPdfModalOpen, setIsPdfModalOpen] = useState(false);
 
-  // Sync store name with seller when seller logs in if not customized
-  useEffect(() => {
-    if (seller && seller.storeName && (business.name === DEFAULT_BUSINESS.name || !business.name)) {
-      setBusiness((prev) => ({
-        ...prev,
-        name: seller.storeName || prev.name,
-      }));
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => {
+      setToastMessage(null);
+    }, 3500);
+  };
+
+  // Helper to persist the seller's catalog in the database
+  const syncSellerCatalogToBackend = async (
+    targetProducts: Product[],
+    targetBusiness: BusinessInfo,
+    targetSettings: CatalogSettings,
+    customCatalogId?: string
+  ) => {
+    if (!seller || !token || isCustomerView) return;
+
+    setSaveStatus('saving');
+    try {
+      const response = await fetch('/api/seller/catalog', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          id: customCatalogId || savedCatalogId || undefined,
+          products: targetProducts,
+          business: targetBusiness,
+          settings: targetSettings,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.catalogId) {
+          setSavedCatalogId(data.catalogId);
+        }
+        setSaveStatus('saved');
+      } else {
+        setSaveStatus('error');
+      }
+    } catch (err) {
+      console.error('[App] Error al auto-guardar catálogo del vendedor:', err);
+      setSaveStatus('error');
     }
-  }, [seller]);
+  };
 
   // Global Tailwind dark mode sync on document root
   const isDarkMode = Boolean(
@@ -167,57 +215,88 @@ export default function App() {
     }));
   };
 
-  // Listen for query parameter on load or load persisted store configuration
+  // 1. Listen for query parameter on load (Customer direct storefront)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const catalogId = params.get('id');
     if (catalogId) {
       loadCatalogFromDb(catalogId);
-    } else {
-      // 1. Load saved store profile (name, contacts, logo, colors, settings)
-      loadInitialStoreProfile().then((profile) => {
-        if (profile.business) {
-          setBusiness((prev) => ({ ...prev, ...profile.business }));
-        }
-        if (profile.settings) {
-          setSettings((prev) => {
-            const merged = { ...prev, ...profile.settings };
-            if (profile.settings?.darkMode !== undefined) {
-              merged.darkMode = profile.settings.darkMode;
-            } else if (profile.settings?.theme === 'dark' || profile.settings?.theme === 'premium') {
-              merged.darkMode = true;
-            }
-            return merged;
-          });
-        }
-      });
-
-      // 2. Load cached products if available
-      try {
-        const savedProds = localStorage.getItem('saved_catalog_products');
-        if (savedProds) {
-          const parsed = JSON.parse(savedProds);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            setProducts(parsed);
-          }
-        }
-      } catch (err) {
-        console.warn('Error loading cached products from storage:', err);
-      }
     }
   }, []);
 
-  // Cache products in localStorage whenever updated (only in creator mode)
+  // 2. Load Seller's own catalog upon authentication
   useEffect(() => {
-    if (!isCustomerView && products && products.length > 0) {
-      try {
-        localStorage.setItem('saved_catalog_products', JSON.stringify(products));
-      } catch (err) {
-        console.warn('Could not cache products to localStorage:', err);
-      }
-    }
-  }, [products, isCustomerView]);
+    const fetchSellerCatalog = async () => {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('id')) return; // Customer view
 
+      if (!seller || !token) {
+        setIsCatalogLoadedForSeller(false);
+        return;
+      }
+
+      try {
+        const response = await fetch('/api/seller/catalog', {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          if (data.catalog) {
+            const cat = data.catalog;
+            if (Array.isArray(cat.products)) {
+              if (cat.products.length > 0) {
+                setProducts(cat.products);
+              } else {
+                // If brand new seller with empty catalog, initialize with preset and save
+                setProducts(PRESET_PRODUCTS);
+                syncSellerCatalogToBackend(PRESET_PRODUCTS, cat.business || DEFAULT_BUSINESS, cat.settings || DEFAULT_SETTINGS, cat.id);
+              }
+            }
+            if (cat.business) {
+              setBusiness((prev) => ({
+                ...prev,
+                ...cat.business,
+                name: cat.business.name || seller.storeName || prev.name,
+              }));
+            }
+            if (cat.settings) {
+              setSettings((prev) => ({ ...prev, ...cat.settings }));
+            }
+            if (cat.id) {
+              setSavedCatalogId(cat.id);
+            }
+            setSaveStatus('saved');
+          }
+        }
+      } catch (err) {
+        console.error('[App] Error al cargar catálogo inicial del vendedor:', err);
+      } finally {
+        setIsCatalogLoadedForSeller(true);
+        isInitialMount.current = false;
+      }
+    };
+
+    fetchSellerCatalog();
+  }, [seller?.id, token]);
+
+  // 3. Debounced Auto-Save for changes made in editor
+  useEffect(() => {
+    if (isInitialMount.current || !isCatalogLoadedForSeller || !seller || !token || isCustomerView) {
+      return;
+    }
+
+    setSaveStatus('saving');
+    const timer = setTimeout(() => {
+      syncSellerCatalogToBackend(products, business, settings);
+    }, 800);
+
+    return () => clearTimeout(timer);
+  }, [products, business, settings, isCatalogLoadedForSeller]);
+
+  // Load customer catalog function
   const loadCatalogFromDb = async (id: string) => {
     setIsLoadingCatalog(true);
     setCatalogError(null);
@@ -230,7 +309,7 @@ export default function App() {
       setBusiness(data.business);
       setSettings(data.settings);
       setProducts(data.products);
-      setIsCustomerView(true); // render direct storefront for catalog viewers
+      setIsCustomerView(true);
     } catch (error: any) {
       console.error('Error loading catalog:', error);
       setCatalogError(error.message || 'Catálogo no encontrado.');
@@ -239,6 +318,7 @@ export default function App() {
     }
   };
 
+  // Called when new product(s) are uploaded from file, camera, URL, or form
   const handleProductsUploaded = (newProducts: Product[]) => {
     setProducts((prev) => {
       const current = [...prev];
@@ -247,12 +327,17 @@ export default function App() {
         if (index > -1) {
           current[index] = item;
         } else {
-          current.push(item);
+          current.unshift(item);
         }
       });
+
+      // Save directly to seller's catalog in backend
+      syncSellerCatalogToBackend(current, business, settings);
       return current;
     });
-    // On mobile, automatically bring user to products tab after upload
+
+    const count = newProducts.length;
+    showToast(count === 1 ? '✓ Producto guardado en tu catálogo de vendedor' : `✓ ${count} productos guardados en tu catálogo`);
     setMobileTab('products');
   };
 
@@ -267,7 +352,10 @@ export default function App() {
     try {
       const response = await fetch('/api/catalogs', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({
           id: savedCatalogId || undefined,
           business,
@@ -282,8 +370,9 @@ export default function App() {
 
       const data = await response.json();
       setSavedCatalogId(data.id);
-      saveStoreProfile(business, settings).catch(() => {});
+      setSaveStatus('saved');
       setIsShareModalOpen(true);
+      showToast('✓ Catálogo guardado y listo para compartir');
     } catch (error: any) {
       console.error('Error saving catalog:', error);
       alert('Ocurrió un error al guardar tu catálogo en el servidor. Inténtalo de nuevo.');
@@ -301,6 +390,7 @@ export default function App() {
       navigator.clipboard.writeText(shareUrl);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
+      showToast('Enlace copiado al portapapeles');
     }
   };
 
@@ -373,6 +463,14 @@ export default function App() {
   // RENDER CREATOR DASHBOARD FOR AUTHENTICATED SELLERS
   return (
     <div className="min-h-screen bg-neutral-50 dark:bg-black text-neutral-900 dark:text-white flex flex-col font-sans transition-colors duration-200 pb-20 lg:pb-0" id="creator-dashboard-root">
+      {/* Toast Notification Alert */}
+      {toastMessage && (
+        <div className="fixed top-4 right-4 z-50 bg-neutral-900 dark:bg-white text-white dark:text-black px-4 py-2.5 rounded-2xl shadow-2xl flex items-center gap-2 text-xs font-bold animate-in fade-in slide-in-from-top-3 duration-200 border border-neutral-700/40 dark:border-neutral-200">
+          <CheckCircle2 className="w-4 h-4 text-emerald-400 dark:text-emerald-600 shrink-0" />
+          <span>{toastMessage}</span>
+        </div>
+      )}
+
       {/* Top Navbar Optimized for Smartphone & Desktop */}
       <header className="bg-white/95 dark:bg-[#0a0a0a]/95 backdrop-blur-md border-b border-neutral-200 dark:border-neutral-800 sticky top-0 z-40 px-3 sm:px-4 py-2.5 sm:py-3 shadow-2xs pt-safe">
         <div className="max-w-7xl mx-auto flex items-center justify-between gap-2 sm:gap-4">
@@ -385,9 +483,30 @@ export default function App() {
               <h1 className="text-xs sm:text-sm font-bold text-neutral-900 dark:text-white tracking-tight truncate">
                 {business.name || seller.storeName || 'Catálogo Inteligente'}
               </h1>
-              <p className="text-[9px] sm:text-[10px] text-neutral-500 dark:text-neutral-400 font-medium hidden xs:block truncate">
-                Panel de Vendedor • @{seller.username}
-              </p>
+              <div className="flex items-center gap-2 flex-wrap">
+                <p className="text-[9px] sm:text-[10px] text-neutral-500 dark:text-neutral-400 font-medium truncate">
+                  Panel de Vendedor • @{seller.username}
+                </p>
+                {/* Auto-save Status Indicator */}
+                <div className="flex items-center gap-1 text-[9px] font-semibold">
+                  {saveStatus === 'saving' ? (
+                    <span className="text-neutral-500 dark:text-neutral-400 flex items-center gap-1">
+                      <RefreshCw className="w-2.5 h-2.5 animate-spin text-neutral-400" />
+                      <span className="hidden sm:inline">Guardando en catálogo...</span>
+                    </span>
+                  ) : saveStatus === 'saved' ? (
+                    <span className="text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                      <CheckCircle2 className="w-2.5 h-2.5" />
+                      <span className="hidden sm:inline">Guardado en catálogo</span>
+                    </span>
+                  ) : (
+                    <span className="text-amber-500 flex items-center gap-1">
+                      <AlertCircle className="w-2.5 h-2.5" />
+                      <span className="hidden sm:inline">Pendiente de guardar</span>
+                    </span>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
 

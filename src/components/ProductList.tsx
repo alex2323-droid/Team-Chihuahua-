@@ -14,6 +14,7 @@ import {
   Plus,
   Sparkles,
   X,
+  CheckCircle2,
 } from 'lucide-react';
 
 interface ProductListProps {
@@ -139,11 +140,17 @@ export default function ProductList({ products, setProducts, currency }: Product
     <div className="space-y-4" id="product-list-panel">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-base font-bold text-neutral-800 dark:text-white flex items-center gap-1.5">
-            <Layers className="w-5 h-5 text-neutral-500 dark:text-neutral-400" />
-            Lista de Productos ({products.length})
-          </h2>
-          <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h2 className="text-base font-bold text-neutral-800 dark:text-white flex items-center gap-1.5">
+              <Layers className="w-5 h-5 text-neutral-500 dark:text-neutral-400" />
+              Lista de Productos ({products.length})
+            </h2>
+            <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800/60 shadow-2xs">
+              <CheckCircle2 className="w-3 h-3 text-emerald-500" />
+              Guardado en tu cuenta
+            </span>
+          </div>
+          <p className="text-[11px] text-neutral-500 dark:text-neutral-400 mt-0.5">
             Organiza, edita detalles y reordena los productos de tu catálogo.
           </p>
         </div>

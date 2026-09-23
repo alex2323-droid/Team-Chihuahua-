@@ -795,7 +795,7 @@ INSTRUCCIONES DE RESPUESTA:
   }
 });
 
-// 2. Save a catalog
+// 2. Save a catalog (Public or Seller)
 app.post("/api/catalogs", (req, res) => {
   try {
     const { id, business, settings, products } = req.body;
@@ -806,24 +806,247 @@ app.post("/api/catalogs", (req, res) => {
 
     const db = readDatabase();
     
-    // Generate a unique ID if not provided
-    const catalogId = id || Math.random().toString(36).substring(2, 10).toUpperCase();
+    // Check if authenticated seller is saving
+    const authData = getSellerFromRequest(req, db);
+    const sellerId = authData?.seller?.id;
+
+    // Generate a unique ID if not provided or use seller id
+    const catalogId = id || (sellerId ? `cat-${sellerId.replace('seller-', '')}` : Math.random().toString(36).substring(2, 10).toUpperCase());
 
     const catalogData = {
       id: catalogId,
+      sellerId: sellerId || null,
       business,
       settings,
       products,
-      createdAt: new Date().toISOString()
+      updatedAt: new Date().toISOString(),
+      createdAt: db[catalogId]?.createdAt || new Date().toISOString()
     };
 
     db[catalogId] = catalogData;
+
+    // Also persist under seller's private space if authenticated
+    if (sellerId) {
+      if (!db["_sellers_catalogs"]) db["_sellers_catalogs"] = {};
+      db["_sellers_catalogs"][sellerId] = catalogData;
+    }
+
     writeDatabase(db);
 
     res.json({ success: true, id: catalogId, catalog: catalogData });
   } catch (error: any) {
     console.error("Error al guardar el catálogo:", error);
     res.status(500).json({ error: "No se pudo guardar el catálogo.", details: error.message });
+  }
+});
+
+// ============================================================================
+// DEDICATED SELLER CATALOG ENDPOINTS (Carga y Guardado Automático por Vendedor)
+// ============================================================================
+
+// Obtener el catálogo y productos del vendedor autenticado
+app.get("/api/seller/catalog", (req, res) => {
+  try {
+    const db = readDatabase();
+    const authData = getSellerFromRequest(req, db);
+
+    if (!authData) {
+      return res.status(401).json({ error: "No autorizado. Inicia sesión como vendedor." });
+    }
+
+    const { seller } = authData;
+    if (!db["_sellers_catalogs"]) db["_sellers_catalogs"] = {};
+
+    let sellerCatalog = db["_sellers_catalogs"][seller.id];
+
+    if (!sellerCatalog) {
+      // Create initial catalog for new seller
+      const catalogId = `cat-${seller.id.replace('seller-', '')}`;
+      sellerCatalog = {
+        id: catalogId,
+        sellerId: seller.id,
+        business: {
+          name: seller.storeName || `Tienda ${seller.name}`,
+          tagline: "Calidad garantizada y entregas directas",
+          whatsapp: "",
+          email: seller.email || "",
+          address: "",
+          instagram: "",
+          facebook: "",
+          website: "",
+          announcement: "¡Bienvenidos a nuestro catálogo oficial! Haz tus pedidos fácilmente.",
+          showAnnouncement: true,
+          additionalInfo: ""
+        },
+        settings: {
+          currency: "USD",
+          theme: "light",
+          darkMode: false,
+          enableSearch: true,
+          enableFilters: true,
+          enableCart: true,
+          itemsPerPage: 12,
+          defaultSort: "featured",
+          showPrices: true,
+          showSKU: true,
+          showStock: true,
+          accentColor: "#000000"
+        },
+        products: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      db["_sellers_catalogs"][seller.id] = sellerCatalog;
+      db[catalogId] = sellerCatalog;
+      writeDatabase(db);
+    }
+
+    return res.json({
+      success: true,
+      catalog: sellerCatalog,
+    });
+  } catch (error: any) {
+    console.error("[Seller Catalog GET Error]:", error);
+    return res.status(500).json({ error: "Error al recuperar el catálogo del vendedor." });
+  }
+});
+
+// Guardar/Actualizar catálogo completo de productos del vendedor autenticado
+app.post("/api/seller/catalog", (req, res) => {
+  try {
+    const db = readDatabase();
+    const authData = getSellerFromRequest(req, db);
+
+    if (!authData) {
+      return res.status(401).json({ error: "No autorizado. Inicia sesión como vendedor." });
+    }
+
+    const { seller } = authData;
+    const { business, settings, products, id } = req.body;
+
+    if (!db["_sellers_catalogs"]) db["_sellers_catalogs"] = {};
+
+    const existingCatalog = db["_sellers_catalogs"][seller.id] || {};
+    const catalogId = id || existingCatalog.id || `cat-${seller.id.replace('seller-', '')}`;
+
+    const updatedCatalog = {
+      id: catalogId,
+      sellerId: seller.id,
+      business: business || existingCatalog.business || { name: seller.storeName || seller.name },
+      settings: settings || existingCatalog.settings || {},
+      products: Array.isArray(products) ? products : (existingCatalog.products || []),
+      createdAt: existingCatalog.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    db["_sellers_catalogs"][seller.id] = updatedCatalog;
+    db[catalogId] = updatedCatalog; // Sync public catalog route too
+
+    writeDatabase(db);
+
+    console.log(`[Seller Catalog] Guardados ${updatedCatalog.products.length} productos en el catálogo de ${seller.username} (ID: ${catalogId})`);
+
+    return res.json({
+      success: true,
+      message: "Catálogo de productos guardado exitosamente en tu cuenta.",
+      catalogId,
+      catalog: updatedCatalog,
+    });
+  } catch (error: any) {
+    console.error("[Seller Catalog Save Error]:", error);
+    return res.status(500).json({ error: "Error al guardar el catálogo en tu cuenta de vendedor." });
+  }
+});
+
+// Agregar o actualizar un producto individual directamente en el catálogo del vendedor
+app.post("/api/seller/products", (req, res) => {
+  try {
+    const db = readDatabase();
+    const authData = getSellerFromRequest(req, db);
+
+    if (!authData) {
+      return res.status(401).json({ error: "No autorizado. Inicia sesión como vendedor." });
+    }
+
+    const { seller } = authData;
+    const { product } = req.body;
+
+    if (!product || !product.id || !product.name) {
+      return res.status(400).json({ error: "Faltan datos obligatorios del producto (id, name)." });
+    }
+
+    if (!db["_sellers_catalogs"]) db["_sellers_catalogs"] = {};
+    const existingCatalog = db["_sellers_catalogs"][seller.id] || {
+      id: `cat-${seller.id.replace('seller-', '')}`,
+      sellerId: seller.id,
+      products: [],
+      business: { name: seller.storeName || seller.name },
+      settings: {}
+    };
+
+    const products: any[] = existingCatalog.products || [];
+    const prodIndex = products.findIndex((p: any) => p.id === product.id);
+
+    if (prodIndex >= 0) {
+      products[prodIndex] = { ...products[prodIndex], ...product, updatedAt: new Date().toISOString() };
+    } else {
+      products.unshift({ ...product, createdAt: new Date().toISOString() });
+    }
+
+    existingCatalog.products = products;
+    existingCatalog.updatedAt = new Date().toISOString();
+
+    db["_sellers_catalogs"][seller.id] = existingCatalog;
+    db[existingCatalog.id] = existingCatalog;
+    writeDatabase(db);
+
+    return res.json({
+      success: true,
+      message: `Producto "${product.name}" guardado exitosamente en tu catálogo.`,
+      product,
+      catalogId: existingCatalog.id,
+      totalProducts: products.length,
+    });
+  } catch (error: any) {
+    console.error("[Seller Add Product Error]:", error);
+    return res.status(500).json({ error: "Error al guardar el producto en el catálogo." });
+  }
+});
+
+// Eliminar un producto del catálogo del vendedor
+app.delete("/api/seller/products/:productId", (req, res) => {
+  try {
+    const db = readDatabase();
+    const authData = getSellerFromRequest(req, db);
+
+    if (!authData) {
+      return res.status(401).json({ error: "No autorizado. Inicia sesión como vendedor." });
+    }
+
+    const { seller } = authData;
+    const { productId } = req.params;
+
+    if (!db["_sellers_catalogs"] || !db["_sellers_catalogs"][seller.id]) {
+      return res.status(404).json({ error: "No se encontró el catálogo del vendedor." });
+    }
+
+    const catalog = db["_sellers_catalogs"][seller.id];
+    catalog.products = (catalog.products || []).filter((p: any) => p.id !== productId);
+    catalog.updatedAt = new Date().toISOString();
+
+    db["_sellers_catalogs"][seller.id] = catalog;
+    db[catalog.id] = catalog;
+    writeDatabase(db);
+
+    return res.json({
+      success: true,
+      message: "Producto eliminado correctamente de tu catálogo.",
+      totalProducts: catalog.products.length,
+    });
+  } catch (error: any) {
+    console.error("[Seller Delete Product Error]:", error);
+    return res.status(500).json({ error: "Error al eliminar el producto." });
   }
 });
 
