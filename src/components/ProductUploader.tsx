@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { Upload, DollarSign, Image as ImageIcon, Sparkles, AlertCircle, Link as LinkIcon, Globe, Info } from 'lucide-react';
 import { Product } from '../types';
+import { getApiUrl } from '../utils/api';
 
 interface ProductUploaderProps {
   onProductsUploaded: (newProducts: Product[]) => void;
@@ -95,7 +96,7 @@ export default function ProductUploader({ onProductsUploaded, currency }: Produc
       try {
         const base64 = await fileToBase64(file);
         
-        const response = await fetch('/api/analyze-image', {
+        const response = await fetch(getApiUrl('/api/analyze-image'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -187,7 +188,7 @@ export default function ProductUploader({ onProductsUploaded, currency }: Produc
     onProductsUploaded([tempProduct]);
 
     try {
-      const response = await fetch('/api/analyze-url', {
+      const response = await fetch(getApiUrl('/api/analyze-url'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

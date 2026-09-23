@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { Product, BusinessInfo, CatalogSettings } from '../types';
 import PdfExportModal from './PdfExportModal';
 import ImageLightboxModal from './ImageLightboxModal';
+import { getApiUrl } from '../utils/api';
 import {
   Search,
   ShoppingCart,
@@ -47,7 +48,7 @@ export default function CatalogPreview({
   const handleImageError = (e: React.SyntheticEvent<HTMLImageElement, Event>, originalUrl: string) => {
     const target = e.currentTarget;
     if (originalUrl && !target.src.includes('/api/proxy-image') && originalUrl.startsWith('http')) {
-      target.src = `/api/proxy-image?url=${encodeURIComponent(originalUrl)}`;
+      target.src = getApiUrl(`/api/proxy-image?url=${encodeURIComponent(originalUrl)}`);
     } else {
       target.src = 'https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=500&auto=format&fit=crop&q=80';
     }
