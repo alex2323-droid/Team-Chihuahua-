@@ -1,21 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { BusinessInfo, CatalogSettings, Product, Catalog } from './types';
 import BusinessSettings from './components/BusinessSettings';
 import ProductUploader from './components/ProductUploader';
 import ProductList from './components/ProductList';
 import CatalogPreview from './components/CatalogPreview';
 import PdfExportModal from './components/PdfExportModal';
-import SellerPortal from './components/SellerPortal';
-import { useAuth } from './context/AuthContext';
-import { loadInitialStoreProfile, saveStoreProfile } from './utils/storeProfile';
-import './firebase';
-import {
-  saveSellerCatalogToFirestore,
-  loadSellerCatalogFromFirestore,
-  subscribeToSellerCatalog,
-  loadPublicCatalog,
-  getSellerCatalogDocId,
-} from './services/catalogSyncService';
+import SellerAuthModal from './components/SellerAuthModal';
 import {
   Sparkles,
   Share2,
@@ -34,19 +24,9 @@ import {
   X,
   FileDown,
   Printer,
-  Moon,
-  Sun,
-  Store,
-  Upload,
-  Package,
-  LogOut,
   User,
-  ShieldCheck,
-  CheckCircle2,
-  Cloud,
-  CloudCheck,
-  Save,
-  AlertCircle,
+  LogOut,
+  Lock,
 } from 'lucide-react';
 
 const DEFAULT_BUSINESS: BusinessInfo = {
@@ -59,10 +39,9 @@ const DEFAULT_BUSINESS: BusinessInfo = {
 };
 
 const DEFAULT_SETTINGS: CatalogSettings = {
-  primaryColor: '#111827', // Charcoal Black
-  secondaryColor: '#3B82F6',
-  theme: 'light',
-  darkMode: false,
+  primaryColor: '#000000', // Default negro
+  secondaryColor: '#ffffff', // Default blanco
+  theme: 'dark', // Dark mode por defecto
   currency: 'EUR',
   layout: 'grid',
   showSku: true,
@@ -122,57 +101,20 @@ const PRESET_PRODUCTS: Product[] = [
   },
 ];
 
-type MobileTab = 'store' | 'upload' | 'products' | 'preview';
-
 export default function App() {
-  const { seller, token, isLoading: isAuthLoading, logout } = useAuth();
+  const [business, setBusiness] = useState<BusinessInfo>(DEFAULT_BUSINESS);
+  const [settings, setSettings] = useState<CatalogSettings>(DEFAULT_SETTINGS);
+  const [products, setProducts] = useState<Product[]>([]);
 
-  const [business, setBusiness] = useState<BusinessInfo>(() => {
-    try {
-      const saved = localStorage.getItem('saved_store_business');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed && typeof parsed === 'object') return parsed;
-      }
-    } catch (e) {}
-    return DEFAULT_BUSINESS;
-  });
-
-  const [settings, setSettings] = useState<CatalogSettings>(() => {
-    try {
-      const saved = localStorage.getItem('saved_catalog_settings');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed && typeof parsed === 'object') return parsed;
-      }
-    } catch (e) {}
-    return DEFAULT_SETTINGS;
-  });
-
-  const [products, setProducts] = useState<Product[]>(() => {
-    try {
-      const saved = localStorage.getItem('saved_catalog_products');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return parsed;
-      }
-    } catch (e) {}
-    return PRESET_PRODUCTS;
-  });
+  // Authentication states
+  const [currentSeller, setCurrentSeller] = useState<string | null>(null);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
 
   // App mode states
   const [activeTab, setActiveTab] = useState<'editor' | 'preview'>('editor');
-  const [mobileTab, setMobileTab] = useState<MobileTab>('products');
   const [isLoadingCatalog, setIsLoadingCatalog] = useState(false);
   const [isCustomerView, setIsCustomerView] = useState(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
-
-  // Persistence & Save status states
-  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error' | 'idle'>('saved');
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const [isCatalogLoadedForSeller, setIsCatalogLoadedForSeller] = useState(false);
-  const isInitialMount = useRef(true);
-  const lastSavedTimestampRef = useRef<number>(Date.now());
 
   // Share Modal / Deployed link state
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
@@ -181,263 +123,94 @@ export default function App() {
   const [copied, setCopied] = useState(false);
   const [isPdfModalOpen, setIsPdfModalOpen] = useState(false);
 
-  const showToast = (msg: string) => {
-    setToastMessage(msg);
-    setTimeout(() => {
-      setToastMessage(null);
-    }, 3500);
-  };
-
-  // Synchronize products, business, and settings to localStorage continuously
+  // Load configuration on mount
   useEffect(() => {
-    try {
-      localStorage.setItem('saved_catalog_products', JSON.stringify(products));
-      localStorage.setItem('saved_store_business', JSON.stringify(business));
-      localStorage.setItem('saved_catalog_settings', JSON.stringify(settings));
-    } catch (e) {
-      console.warn('[App] LocalStorage auto-persist notice:', e);
-    }
-  }, [products, business, settings]);
+    const params = new URLSearchParams(window.location.search);
+    const catalogId = params.get('id');
 
-  // Helper to persist the seller's catalog in Cloud Firestore and backend
-  const syncSellerCatalogToBackend = async (
-    targetProducts: Product[],
-    targetBusiness: BusinessInfo,
-    targetSettings: CatalogSettings,
-    customCatalogId?: string
-  ) => {
-    if (isCustomerView) return;
-
-    // Immediately persist locally
-    try {
-      localStorage.setItem('saved_catalog_products', JSON.stringify(targetProducts));
-      localStorage.setItem('saved_store_business', JSON.stringify(targetBusiness));
-      localStorage.setItem('saved_catalog_settings', JSON.stringify(targetSettings));
-    } catch (e) {}
-
-    if (!seller) return;
-
-    setSaveStatus('saving');
-    lastSavedTimestampRef.current = Date.now();
-    try {
-      // 1. Primary Sync: Cloud Firestore (guarantees cross-device availability)
-      const firestoreResult = await saveSellerCatalogToFirestore(seller, {
-        products: targetProducts,
-        business: targetBusiness,
-        settings: targetSettings,
-        id: customCatalogId || savedCatalogId || undefined,
-      });
-
-      if (firestoreResult.catalogId) {
-        setSavedCatalogId(firestoreResult.catalogId);
+    if (catalogId) {
+      loadCatalogFromDb(catalogId);
+    } else {
+      // Check for logged-in seller session
+      const savedSeller = localStorage.getItem('seller_username');
+      if (savedSeller) {
+        setCurrentSeller(savedSeller);
+        loadSellerCatalog(savedSeller);
+      } else {
+        // Load local fallback catalog data
+        const localData = localStorage.getItem('local_catalog_data');
+        if (localData) {
+          try {
+            const parsed = JSON.parse(localData);
+            if (parsed.business) setBusiness(parsed.business);
+            if (parsed.settings) setSettings(parsed.settings);
+            if (parsed.products) {
+              setProducts(parsed.products);
+            } else {
+              setProducts(PRESET_PRODUCTS);
+            }
+            if (parsed.catalogId) setSavedCatalogId(parsed.catalogId);
+          } catch (e) {
+            console.error('Error parsing local catalog:', e);
+            setProducts(PRESET_PRODUCTS);
+          }
+        } else {
+          // Absolute fallback
+          setProducts(PRESET_PRODUCTS);
+        }
       }
-
-      // 2. Secondary Sync: Backend API (if available)
-      if (token) {
-        fetch('/api/seller/catalog', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({
-            id: customCatalogId || savedCatalogId || firestoreResult.catalogId,
-            products: targetProducts,
-            business: targetBusiness,
-            settings: targetSettings,
-          }),
-        }).catch((err) => console.warn('[App] Backend sync note:', err));
-      }
-
-      setSaveStatus('saved');
-    } catch (err) {
-      console.error('[App] Error al guardar en la nube:', err);
-      setSaveStatus('saved'); // Keep functional for user
     }
-  };
+  }, []);
 
-  // Global Tailwind dark mode sync on document root
-  const isDarkMode = Boolean(
-    settings.darkMode ||
-    settings.theme === 'dark' ||
-    settings.theme === 'premium'
-  );
-
+  // Sync / Apply theme classes globally to the <html> root element
   useEffect(() => {
-    if (isDarkMode) {
+    if (settings.theme === 'dark') {
       document.documentElement.classList.add('dark');
     } else {
       document.documentElement.classList.remove('dark');
     }
-  }, [isDarkMode]);
+  }, [settings.theme]);
 
-  // Toggle Dark Theme Helper
-  const toggleDarkMode = () => {
-    const nextDarkState = !isDarkMode;
-    setSettings((prev) => ({
-      ...prev,
-      darkMode: nextDarkState,
-      theme: nextDarkState ? 'dark' : 'light',
-    }));
-  };
-
-  // 1. Listen for query parameter on load (Customer direct storefront)
+  // Debounced auto-saving of changes to persistent storage (local or cloud)
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const catalogId = params.get('id');
-    if (catalogId) {
-      loadCatalogFromDb(catalogId);
-    }
-  }, []);
+    if (isCustomerView) return;
 
-  // 2. Load Seller's own catalog from Cloud Firestore & subscribe to live updates
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('id')) return; // Customer view
+    // Save to local storage for quick reload recovery
+    localStorage.setItem(
+      'local_catalog_data',
+      JSON.stringify({ business, settings, products, catalogId: savedCatalogId })
+    );
 
-    if (!seller) {
-      setIsCatalogLoadedForSeller(true);
-      isInitialMount.current = false;
-      return;
-    }
-
-    let unsubscribeFirestore: (() => void) | null = null;
-
-    const fetchSellerCatalog = async () => {
-      setIsLoadingCatalog(true);
-      try {
-        // Step A: Load from Cloud Firestore first (Cross-device primary)
-        const cloudCatalog = await loadSellerCatalogFromFirestore(seller);
-
-        if (cloudCatalog) {
-          if (Array.isArray(cloudCatalog.products)) {
-            setProducts(cloudCatalog.products);
-          }
-          if (cloudCatalog.business) {
-            setBusiness((prev) => ({
-              ...prev,
-              ...cloudCatalog.business,
-              name: cloudCatalog.business.name || seller.storeName || prev.name,
-            }));
-          }
-          if (cloudCatalog.settings) {
-            setSettings((prev) => ({ ...prev, ...cloudCatalog.settings }));
-          }
-          if (cloudCatalog.id) {
-            setSavedCatalogId(cloudCatalog.id);
-          }
-          setSaveStatus('saved');
-        } else {
-          // If no cloud catalog document exists yet, immediately create it from existing local products
-          syncSellerCatalogToBackend(products, business, settings);
-
-          // Fallback to Backend API if available
-          if (token) {
-            try {
-              const response = await fetch('/api/seller/catalog', {
-                headers: {
-                  Authorization: `Bearer ${token}`,
-                },
-              });
-
-              if (response.ok) {
-                const data = await response.json();
-                if (data.catalog) {
-                  const cat = data.catalog;
-                  if (Array.isArray(cat.products)) {
-                    setProducts(cat.products);
-                  }
-                  if (cat.business) {
-                    setBusiness((prev) => ({
-                      ...prev,
-                      ...cat.business,
-                      name: cat.business.name || seller.storeName || prev.name,
-                    }));
-                  }
-                  if (cat.settings) {
-                    setSettings((prev) => ({ ...prev, ...cat.settings }));
-                  }
-                  if (cat.id) {
-                    setSavedCatalogId(cat.id);
-                  }
-                }
-              }
-            } catch (apiErr) {
-              console.warn('[App] API fallback notice:', apiErr);
-            }
-          }
+    // If logged in as seller, auto-sync back-to-back to cloud (PostgreSQL-backed Node server)
+    if (currentSeller) {
+      const delayDebounce = setTimeout(async () => {
+        try {
+          await fetch('/api/seller/save-catalog', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              username: currentSeller,
+              catalog: {
+                id: savedCatalogId || `CAT-${Math.random().toString(36).substring(2, 10).toUpperCase()}`,
+                business,
+                settings,
+                products,
+              },
+            }),
+          });
+          console.log('[Cloud] Autoguardado exitoso.');
+        } catch (err) {
+          console.error('Error auto-guardando en la nube:', err);
         }
-
-        // Step C: Subscribe to Real-Time Cloud Firestore Updates (Live cross-device sync)
-        unsubscribeFirestore = subscribeToSellerCatalog(seller.username, (liveData) => {
-          if (liveData) {
-            const liveTime = liveData.updatedAt ? new Date(liveData.updatedAt).getTime() : 0;
-            // Only accept remote update if it is strictly from another device and newer
-            if (liveTime > lastSavedTimestampRef.current + 2500) {
-              if (Array.isArray(liveData.products)) {
-                setProducts(liveData.products);
-              }
-              if (liveData.business) {
-                setBusiness((prev) => ({ ...prev, ...liveData.business }));
-              }
-              if (liveData.settings) {
-                setSettings((prev) => ({ ...prev, ...liveData.settings }));
-              }
-              if (liveData.id) {
-                setSavedCatalogId(liveData.id);
-              }
-              setSaveStatus('saved');
-            }
-          }
-        });
-      } catch (err) {
-        console.error('[App] Error al cargar catálogo de vendedor:', err);
-      } finally {
-        setIsLoadingCatalog(false);
-        setIsCatalogLoadedForSeller(true);
-        isInitialMount.current = false;
-      }
-    };
-
-    fetchSellerCatalog();
-
-    return () => {
-      if (unsubscribeFirestore) {
-        unsubscribeFirestore();
-      }
-    };
-  }, [seller?.id, seller?.username, token]);
-
-  // 3. Debounced Auto-Save for changes made in editor (Saves straight to Cloud Firestore and localStorage)
-  useEffect(() => {
-    if (isInitialMount.current || isCustomerView) {
-      return;
+      }, 1500); // 1.5s debounce to minimize network overhead while typing
+      return () => clearTimeout(delayDebounce);
     }
+  }, [business, settings, products, currentSeller, savedCatalogId, isCustomerView]);
 
-    setSaveStatus('saving');
-    const timer = setTimeout(() => {
-      syncSellerCatalogToBackend(products, business, settings);
-    }, 600);
-
-    return () => clearTimeout(timer);
-  }, [products, business, settings]);
-
-  // Load customer catalog function with Cloud Firestore support
   const loadCatalogFromDb = async (id: string) => {
     setIsLoadingCatalog(true);
     setCatalogError(null);
     try {
-      // 1. Try Cloud Firestore
-      const publicDoc = await loadPublicCatalog(id);
-      if (publicDoc) {
-        setBusiness(publicDoc.business);
-        setSettings(publicDoc.settings);
-        setProducts(publicDoc.products);
-        setIsCustomerView(true);
-        return;
-      }
-
-      // 2. Fallback to API
       const response = await fetch(`/api/catalogs/${id}`);
       if (!response.ok) {
         throw new Error('No se pudo encontrar el catálogo solicitado.');
@@ -446,7 +219,7 @@ export default function App() {
       setBusiness(data.business);
       setSettings(data.settings);
       setProducts(data.products);
-      setIsCustomerView(true);
+      setIsCustomerView(true); // Direct customer presentation mode
     } catch (error: any) {
       console.error('Error loading catalog:', error);
       setCatalogError(error.message || 'Catálogo no encontrado.');
@@ -455,7 +228,24 @@ export default function App() {
     }
   };
 
-  // Called when new product(s) are uploaded from file, camera, URL, or form
+  const loadSellerCatalog = async (username: string) => {
+    setIsLoadingCatalog(true);
+    try {
+      const response = await fetch(`/api/seller/catalog?username=${encodeURIComponent(username)}`);
+      if (response.ok) {
+        const data = await response.json();
+        setBusiness(data.business);
+        setSettings(data.settings);
+        setProducts(data.products);
+        setSavedCatalogId(data.id);
+      }
+    } catch (err) {
+      console.error('Error al recuperar catálogo del vendedor:', err);
+    } finally {
+      setIsLoadingCatalog(false);
+    }
+  };
+
   const handleProductsUploaded = (newProducts: Product[]) => {
     setProducts((prev) => {
       const current = [...prev];
@@ -464,57 +254,95 @@ export default function App() {
         if (index > -1) {
           current[index] = item;
         } else {
-          current.unshift(item);
+          current.push(item);
         }
       });
-
-      // Save directly to seller's catalog in backend
-      syncSellerCatalogToBackend(current, business, settings);
       return current;
     });
-
-    const count = newProducts.length;
-    showToast(count === 1 ? '✓ Producto guardado en tu catálogo de vendedor' : `✓ ${count} productos guardados en tu catálogo`);
-    setMobileTab('products');
   };
 
   const handleSaveAndPublish = async () => {
-    if (!business.name || !business.whatsapp) {
-      alert('Por favor, completa el nombre del negocio y el número de WhatsApp para poder continuar.');
-      setMobileTab('store');
+    if (!business.name) {
+      alert('Por favor, completa el nombre de tu negocio para poder guardar.');
       return;
     }
 
     setIsSaving(true);
     try {
-      const response = await fetch('/api/catalogs', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({
-          id: savedCatalogId || undefined,
-          business,
-          settings,
-          products,
-        }),
-      });
+      let finalCatalogId = savedCatalogId;
+      
+      // If logged in, save under their active profile
+      if (currentSeller) {
+        const response = await fetch('/api/seller/save-catalog', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: currentSeller,
+            catalog: {
+              id: savedCatalogId || `CAT-${Math.random().toString(36).substring(2, 10).toUpperCase()}`,
+              business,
+              settings,
+              products,
+            },
+          }),
+        });
 
-      if (!response.ok) {
-        throw new Error('Error de servidor al guardar catálogo.');
+        if (!response.ok) {
+          throw new Error('No se pudo guardar la configuración en tu cuenta.');
+        }
+
+        const data = await response.json();
+        finalCatalogId = data.catalogId;
+        setSavedCatalogId(data.catalogId);
+      } else {
+        // Guest save to global directory
+        const response = await fetch('/api/catalogs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: savedCatalogId || undefined,
+            business,
+            settings,
+            products,
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error('Error al publicar el catálogo de forma anónima.');
+        }
+
+        const data = await response.json();
+        finalCatalogId = data.id;
+        setSavedCatalogId(data.id);
       }
 
-      const data = await response.json();
-      setSavedCatalogId(data.id);
-      setSaveStatus('saved');
       setIsShareModalOpen(true);
-      showToast('✓ Catálogo guardado y listo para compartir');
     } catch (error: any) {
-      console.error('Error saving catalog:', error);
-      alert('Ocurrió un error al guardar tu catálogo en el servidor. Inténtalo de nuevo.');
+      console.error('Error al guardar:', error);
+      alert(error.message || 'Error de conexión al guardar.');
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleAuthSuccess = (username: string, catalog: Catalog) => {
+    setCurrentSeller(username);
+    localStorage.setItem('seller_username', username);
+    setBusiness(catalog.business);
+    setSettings(catalog.settings);
+    setProducts(catalog.products || []);
+    setSavedCatalogId(catalog.id);
+  };
+
+  const handleLogout = () => {
+    if (confirm('¿Estás seguro de que deseas cerrar tu sesión de vendedor? Las modificaciones no sincronizadas se mantendrán de forma local.')) {
+      setCurrentSeller(null);
+      localStorage.removeItem('seller_username');
+      localStorage.removeItem('local_catalog_data');
+      setBusiness(DEFAULT_BUSINESS);
+      setSettings(DEFAULT_SETTINGS);
+      setProducts(PRESET_PRODUCTS);
+      setSavedCatalogId(null);
     }
   };
 
@@ -527,7 +355,6 @@ export default function App() {
       navigator.clipboard.writeText(shareUrl);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-      showToast('Enlace copiado al portapapeles');
     }
   };
 
@@ -538,14 +365,14 @@ export default function App() {
     }
   };
 
-  // RENDER CUSTOMER STANDALONE VIEW (Customers view catalogs directly without needing to log in)
+  // Standalone Customer Mode Presentation
   if (isCustomerView) {
     if (isLoadingCatalog) {
       return (
-        <div className="min-h-screen flex items-center justify-center bg-neutral-50 dark:bg-black text-neutral-900 dark:text-white">
-          <div className="text-center space-y-3">
-            <div className="w-10 h-10 border-4 border-neutral-900 dark:border-white border-t-transparent dark:border-t-transparent rounded-full animate-spin mx-auto" />
-            <p className="text-xs text-neutral-500 dark:text-neutral-400 font-semibold">Cargando catálogo...</p>
+        <div className="min-h-screen flex items-center justify-center bg-neutral-950 text-white">
+          <div className="text-center space-y-4">
+            <div className="w-12 h-12 border-4 border-white border-t-transparent rounded-full animate-spin mx-auto" />
+            <p className="text-xs text-neutral-400 font-semibold tracking-wide uppercase">Cargando catálogo interactivo...</p>
           </div>
         </div>
       );
@@ -553,18 +380,18 @@ export default function App() {
 
     if (catalogError) {
       return (
-        <div className="min-h-screen flex items-center justify-center bg-neutral-50 dark:bg-black px-4 text-center">
-          <div className="max-w-md bg-white dark:bg-neutral-900 p-8 rounded-2xl shadow-sm border border-neutral-100 dark:border-neutral-800 space-y-4">
-            <div className="w-12 h-12 bg-red-50 dark:bg-red-950/40 text-red-500 flex items-center justify-center rounded-full mx-auto font-bold text-xl">
+        <div className="min-h-screen flex items-center justify-center bg-neutral-950 px-4 text-center text-white">
+          <div className="max-w-md bg-neutral-900 p-8 rounded-2xl shadow-2xl border border-neutral-800 space-y-4">
+            <div className="w-12 h-12 bg-red-950 text-red-400 flex items-center justify-center rounded-full mx-auto font-bold text-xl border border-red-900">
               !
             </div>
-            <h2 className="text-lg font-bold text-neutral-800 dark:text-white">Catálogo No Disponible</h2>
-            <p className="text-xs text-neutral-500 dark:text-neutral-400 leading-relaxed">{catalogError}</p>
+            <h2 className="text-lg font-bold">Catálogo No Disponible</h2>
+            <p className="text-xs text-neutral-400 leading-relaxed">{catalogError}</p>
             <a
               href={window.location.origin + window.location.pathname}
-              className="inline-block bg-neutral-900 hover:bg-neutral-800 dark:bg-white dark:hover:bg-neutral-100 text-white dark:text-black text-xs font-semibold px-4 py-2 rounded-lg transition"
+              className="inline-block bg-white text-black text-xs font-bold px-5 py-2.5 rounded-xl hover:bg-neutral-200 transition shadow"
             >
-              Crear Nuevo Catálogo
+              Crear Mi Propio Catálogo
             </a>
           </div>
         </div>
@@ -581,186 +408,150 @@ export default function App() {
     );
   }
 
-  // AUTHENTICATION CHECK FOR SELLERS ONLY
-  if (isAuthLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-neutral-50 dark:bg-black text-neutral-900 dark:text-white">
-        <div className="text-center space-y-3">
-          <div className="w-10 h-10 border-4 border-neutral-900 dark:border-white border-t-transparent dark:border-t-transparent rounded-full animate-spin mx-auto" />
-          <p className="text-xs text-neutral-500 dark:text-neutral-400 font-semibold">Verificando sesión de vendedor...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (!seller) {
-    return <SellerPortal />;
-  }
-
-  // RENDER CREATOR DASHBOARD FOR AUTHENTICATED SELLERS
+  // Seller Workspace Panel
   return (
-    <div className="min-h-screen bg-neutral-50 dark:bg-black text-neutral-900 dark:text-white flex flex-col font-sans transition-colors duration-200 pb-20 lg:pb-0" id="creator-dashboard-root">
-      {/* Toast Notification Alert */}
-      {toastMessage && (
-        <div className="fixed top-4 right-4 z-50 bg-neutral-900 dark:bg-white text-white dark:text-black px-4 py-2.5 rounded-2xl shadow-2xl flex items-center gap-2 text-xs font-bold animate-in fade-in slide-in-from-top-3 duration-200 border border-neutral-700/40 dark:border-neutral-200">
-          <CheckCircle2 className="w-4 h-4 text-emerald-400 dark:text-emerald-600 shrink-0" />
-          <span>{toastMessage}</span>
-        </div>
-      )}
-
-      {/* Top Navbar Optimized for Smartphone & Desktop */}
-      <header className="bg-white/95 dark:bg-[#0a0a0a]/95 backdrop-blur-md border-b border-neutral-200 dark:border-neutral-800 sticky top-0 z-40 px-3 sm:px-4 py-2.5 sm:py-3 shadow-2xs pt-safe">
-        <div className="max-w-7xl mx-auto flex items-center justify-between gap-2 sm:gap-4">
-          {/* Logo & Title */}
-          <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
-            <div className="bg-neutral-900 dark:bg-white p-2 rounded-xl text-white dark:text-black shadow-sm shrink-0">
-              <ShoppingBag className="w-4 h-4 sm:w-5 sm:h-5" />
+    <div className="min-h-screen bg-neutral-50 dark:bg-neutral-950 dark:text-neutral-100 flex flex-col font-sans transition-colors duration-200" id="creator-dashboard-root">
+      
+      {/* Responsive Header for Laptop & Smartphone */}
+      <header className="bg-white dark:bg-neutral-900 border-b border-neutral-200 dark:border-neutral-800 sticky top-0 z-40 px-4 py-3 shadow-sm transition-colors">
+        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          
+          {/* Brand branding */}
+          <div className="flex items-center justify-between gap-2 w-full sm:w-auto">
+            <div className="flex items-center gap-2.5">
+              <div className="bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 p-2 rounded-xl shadow-xs">
+                <ShoppingBag className="w-5 h-5" />
+              </div>
+              <div>
+                <h1 className="text-xs font-black text-neutral-900 dark:text-neutral-50 tracking-tight leading-none">Catálogo Inteligente</h1>
+                <p className="text-[10px] text-neutral-500 dark:text-neutral-400 font-bold mt-0.5">Vendedor Digital</p>
+              </div>
             </div>
-            <div className="min-w-0">
-              <h1 className="text-xs sm:text-sm font-bold text-neutral-900 dark:text-white tracking-tight truncate">
-                {business.name || seller.storeName || 'Catálogo Inteligente'}
-              </h1>
-              <div className="flex items-center gap-2 flex-wrap">
-                <p className="text-[9px] sm:text-[10px] text-neutral-500 dark:text-neutral-400 font-medium truncate">
-                  Panel de Vendedor • @{seller.username}
-                </p>
-                {/* Cloud Multi-Device Auto-save Status Indicator */}
+
+            {/* Quick Action Buttons on Mobile Viewports */}
+            <div className="flex items-center gap-1.5 sm:hidden">
+              {currentSeller ? (
                 <button
-                  type="button"
-                  onClick={() => {
-                    syncSellerCatalogToBackend(products, business, settings);
-                    showToast('✓ Catálogo sincronizado en la nube (Multidispositivo)');
-                  }}
-                  className="flex items-center gap-1.5 text-[9px] sm:text-[10px] font-semibold bg-neutral-100 dark:bg-neutral-900 hover:bg-neutral-200 dark:hover:bg-neutral-800 px-2 py-0.5 rounded-full border border-neutral-200 dark:border-neutral-800 transition"
-                  title="Guardado automáticamente en la nube. Haz clic para sincronizar ahora."
+                  onClick={handleLogout}
+                  title="Cerrar sesión de vendedor"
+                  className="bg-neutral-100 dark:bg-neutral-800 hover:bg-red-50 dark:hover:bg-red-950/40 text-neutral-700 dark:text-neutral-300 hover:text-red-600 dark:hover:text-red-400 p-2.5 rounded-xl transition border border-transparent"
                 >
-                  {saveStatus === 'saving' ? (
-                    <span className="text-blue-500 flex items-center gap-1">
-                      <RefreshCw className="w-2.5 h-2.5 animate-spin" />
-                      <span>Guardando en la nube...</span>
-                    </span>
-                  ) : saveStatus === 'saved' ? (
-                    <span className="text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
-                      <Cloud className="w-3 h-3 text-emerald-500 shrink-0" />
-                      <span>Sincronizado en la nube ✓</span>
-                    </span>
-                  ) : (
-                    <span className="text-amber-500 flex items-center gap-1">
-                      <AlertCircle className="w-2.5 h-2.5" />
-                      <span>Guardar cambios</span>
-                    </span>
-                  )}
+                  <LogOut className="w-4 h-4" />
                 </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Desktop Navigation Tabs (Hidden on mobile, mobile uses bottom bar) */}
-          <div className="hidden lg:flex bg-neutral-100 dark:bg-neutral-900 p-1 rounded-xl border border-neutral-200/50 dark:border-neutral-800">
-            <button
-              onClick={() => setActiveTab('editor')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
-                activeTab === 'editor'
-                  ? 'bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white shadow-xs'
-                  : 'text-neutral-500 dark:text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200'
-              }`}
-            >
-              <Settings className="w-3.5 h-3.5" />
-              Configuración y Carga
-            </button>
-            <button
-              onClick={() => setActiveTab('preview')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
-                activeTab === 'preview'
-                  ? 'bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white shadow-xs'
-                  : 'text-neutral-500 dark:text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200'
-              }`}
-            >
-              <Eye className="w-3.5 h-3.5" />
-              Vista Previa
-            </button>
-          </div>
-
-          {/* Action Buttons & Seller Profile in Header */}
-          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-            {/* Seller Account Badge */}
-            <div className="hidden md:flex items-center gap-2 px-2.5 py-1.5 bg-neutral-100 dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl text-xs">
-              <div className="w-5 h-5 rounded-full bg-neutral-900 dark:bg-white text-white dark:text-black flex items-center justify-center font-bold text-[10px] shrink-0">
-                {seller.name.charAt(0).toUpperCase()}
-              </div>
-              <div className="text-left leading-tight">
-                <span className="font-bold text-neutral-900 dark:text-white block text-[11px] truncate max-w-[120px]">
-                  {seller.name}
-                </span>
-                <span className="text-[9px] text-neutral-400 dark:text-neutral-500 block truncate max-w-[120px]">
-                  {seller.storeName || `@${seller.username}`}
-                </span>
-              </div>
-            </div>
-
-            {/* Dark Mode Quick Switcher */}
-            <button
-              type="button"
-              onClick={toggleDarkMode}
-              className={`p-2 rounded-xl border transition flex items-center justify-center min-w-[36px] min-h-[36px] ${
-                isDarkMode
-                  ? 'bg-neutral-900 hover:bg-neutral-800 text-yellow-400 border-neutral-800'
-                  : 'bg-white hover:bg-neutral-50 text-neutral-700 border-neutral-200'
-              }`}
-              title={isDarkMode ? 'Modo Claro' : 'Modo Oscuro (Negro y Blanco)'}
-              aria-label="Toggle Dark Mode"
-            >
-              {isDarkMode ? <Sun className="w-4 h-4 text-amber-300" /> : <Moon className="w-4 h-4 text-neutral-600" />}
-            </button>
-
-            {/* PDF Export Button */}
-            <button
-              onClick={() => setIsPdfModalOpen(true)}
-              className="bg-white hover:bg-neutral-50 dark:bg-neutral-900 dark:hover:bg-neutral-800 text-neutral-800 dark:text-neutral-200 border border-neutral-200 dark:border-neutral-800 text-xs font-semibold px-2.5 sm:px-3.5 py-2 rounded-xl transition inline-flex items-center gap-1.5 shadow-2xs min-h-[36px]"
-              title="Exportar catálogo en PDF"
-            >
-              <FileDown className="w-4 h-4 text-blue-500 shrink-0" />
-              <span className="hidden sm:inline">PDF</span>
-            </button>
-
-            {/* Save and Publish Button */}
-            <button
-              onClick={handleSaveAndPublish}
-              disabled={isSaving}
-              className="bg-neutral-900 hover:bg-neutral-800 dark:bg-white dark:hover:bg-neutral-100 text-white dark:text-black text-xs font-bold px-3 sm:px-4 py-2 rounded-xl transition inline-flex items-center gap-1.5 shadow min-h-[36px] active:scale-95 disabled:opacity-50"
-            >
-              {isSaving ? (
-                <>
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin shrink-0" />
-                  <span className="hidden sm:inline">Guardando...</span>
-                </>
               ) : (
-                <>
-                  <Share2 className="w-3.5 h-3.5 shrink-0" />
-                  <span className="hidden xs:inline">Compartir</span>
-                </>
+                <button
+                  onClick={() => setIsAuthModalOpen(true)}
+                  title="Acceso Vendedores"
+                  className="bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 p-2.5 rounded-xl font-bold text-[10px] transition"
+                >
+                  <Lock className="w-4 h-4" />
+                </button>
               )}
-            </button>
+              
+              <button
+                onClick={handleSaveAndPublish}
+                disabled={isSaving}
+                className="bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 p-2.5 rounded-xl font-bold transition flex items-center justify-center shadow"
+              >
+                {isSaving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Share2 className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
 
-            {/* Logout Button */}
-            <button
-              type="button"
-              onClick={() => logout()}
-              className="bg-white hover:bg-red-50 dark:bg-neutral-900 dark:hover:bg-red-950/30 text-neutral-600 hover:text-red-600 dark:text-neutral-400 dark:hover:text-red-400 border border-neutral-200 dark:border-neutral-800 p-2 rounded-xl transition shadow-2xs min-w-[36px] min-h-[36px] flex items-center justify-center"
-              title={`Cerrar sesión de ${seller.name} (@${seller.username})`}
-              aria-label="Cerrar sesión"
-            >
-              <LogOut className="w-4 h-4" />
-            </button>
+          {/* Navigation & Desktop Actions */}
+          <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto">
+            
+            {/* View Mode Tabs */}
+            <div className="flex bg-neutral-100 dark:bg-neutral-950 p-1 rounded-xl w-full sm:w-auto justify-center border border-transparent dark:border-neutral-800">
+              <button
+                onClick={() => setActiveTab('editor')}
+                className={`flex-1 sm:flex-initial px-4 py-1.5 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                  activeTab === 'editor' 
+                    ? 'bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white shadow-xs' 
+                    : 'text-neutral-500 hover:text-neutral-700 dark:text-neutral-400 dark:hover:text-neutral-200'
+                }`}
+              >
+                <Settings className="w-3.5 h-3.5" />
+                <span>Editor</span>
+              </button>
+              <button
+                onClick={() => setActiveTab('preview')}
+                className={`flex-1 sm:flex-initial px-4 py-1.5 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                  activeTab === 'preview' 
+                    ? 'bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white shadow-xs' 
+                    : 'text-neutral-500 hover:text-neutral-700 dark:text-neutral-400 dark:hover:text-neutral-200'
+                }`}
+              >
+                <Eye className="w-3.5 h-3.5" />
+                <span>Vista Previa</span>
+              </button>
+            </div>
+
+            {/* Desktop Action bar */}
+            <div className="hidden sm:flex items-center gap-2">
+              {currentSeller ? (
+                <div className="flex items-center gap-2 bg-neutral-50 dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 px-3 py-1.5 rounded-xl">
+                  <span className="text-[11px] font-bold text-neutral-700 dark:text-neutral-300">
+                    Sincronizado: <span className="text-neutral-950 dark:text-white underline">{currentSeller}</span>
+                  </span>
+                  <button
+                    onClick={handleLogout}
+                    title="Cerrar sesión de vendedor"
+                    className="p-1 hover:bg-neutral-200 dark:hover:bg-neutral-850 rounded-lg text-red-500 transition"
+                  >
+                    <LogOut className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setIsAuthModalOpen(true)}
+                  className="bg-white dark:bg-neutral-900 hover:bg-neutral-50 dark:hover:bg-neutral-850 text-neutral-800 dark:text-neutral-200 border border-neutral-200 dark:border-neutral-800 text-xs font-bold px-3.5 py-2 rounded-lg transition inline-flex items-center gap-1.5 shadow-2xs cursor-pointer"
+                >
+                  <Lock className="w-3.5 h-3.5" />
+                  <span>Acceso Vendedores</span>
+                </button>
+              )}
+
+              <button
+                onClick={() => setIsPdfModalOpen(true)}
+                className="bg-white dark:bg-neutral-900 hover:bg-neutral-50 dark:hover:bg-neutral-850 text-neutral-800 dark:text-neutral-200 border border-neutral-200 dark:border-neutral-800 text-xs font-bold px-3.5 py-2 rounded-lg transition inline-flex items-center gap-1.5 shadow-2xs cursor-pointer"
+                title="Exportar catálogo en PDF listo para imprimir o compartir"
+              >
+                <FileDown className="w-3.5 h-3.5 text-blue-600" />
+                <span>Exportar PDF</span>
+              </button>
+
+              <button
+                onClick={handleSaveAndPublish}
+                disabled={isSaving}
+                className="bg-neutral-900 dark:bg-white dark:text-neutral-900 hover:bg-neutral-800 dark:hover:bg-neutral-100 text-white text-xs font-bold px-4 py-2 rounded-lg transition inline-flex items-center gap-1.5 shadow cursor-pointer"
+              >
+                {isSaving ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Guardando...</span>
+                  </>
+                ) : (
+                  <>
+                    <Share2 className="w-3.5 h-3.5" />
+                    <span>Guardar y Compartir</span>
+                  </>
+                )}
+              </button>
+            </div>
+
           </div>
         </div>
       </header>
 
       {/* Main Workspace Layout */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-3 sm:p-4 md:p-6">
-        {/* DESKTOP LAYOUT (>= 1024px) */}
-        <div className="hidden lg:grid lg:grid-cols-12 gap-6 items-start">
+      <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          
+          {/* EDITOR COLUMN */}
           <div className={`lg:col-span-7 space-y-6 ${activeTab === 'editor' ? 'block' : 'hidden lg:block'}`}>
+            
+            {/* 1. Datos Negocio y Marca */}
             <BusinessSettings
               business={business}
               setBusiness={setBusiness}
@@ -768,11 +559,13 @@ export default function App() {
               setSettings={setSettings}
             />
 
+            {/* 2. Drag & Drop File Loader */}
             <ProductUploader
               onProductsUploaded={handleProductsUploaded}
               currency={settings.currency}
             />
 
+            {/* 3. List of Products */}
             <ProductList
               products={products}
               setProducts={setProducts}
@@ -780,6 +573,7 @@ export default function App() {
             />
           </div>
 
+          {/* DYNAMIC LIVE STOREFRONT PREVIEW */}
           <div className={`lg:col-span-5 ${activeTab === 'preview' ? 'block' : 'hidden lg:block lg:sticky lg:top-20'}`}>
             <CatalogPreview
               business={business}
@@ -788,177 +582,58 @@ export default function App() {
               isCustomerView={false}
             />
           </div>
-        </div>
 
-        {/* SMARTPHONE / MOBILE SCREEN CONTENT (< 1024px) */}
-        <div className="block lg:hidden space-y-4">
-          {mobileTab === 'store' && (
-            <div className="animate-in fade-in duration-150">
-              <BusinessSettings
-                business={business}
-                setBusiness={setBusiness}
-                settings={settings}
-                setSettings={setSettings}
-              />
-            </div>
-          )}
-
-          {mobileTab === 'upload' && (
-            <div className="animate-in fade-in duration-150">
-              <ProductUploader
-                onProductsUploaded={handleProductsUploaded}
-                currency={settings.currency}
-              />
-            </div>
-          )}
-
-          {mobileTab === 'products' && (
-            <div className="animate-in fade-in duration-150 space-y-4">
-              <ProductList
-                products={products}
-                setProducts={setProducts}
-                currency={settings.currency}
-              />
-            </div>
-          )}
-
-          {mobileTab === 'preview' && (
-            <div className="animate-in fade-in duration-150">
-              <CatalogPreview
-                business={business}
-                settings={settings}
-                products={products}
-                isCustomerView={false}
-              />
-            </div>
-          )}
         </div>
       </main>
 
-      {/* FOOTER DESKTOP */}
-      <footer className="hidden lg:block bg-white dark:bg-[#0a0a0a] border-t border-neutral-100 dark:border-neutral-900 py-4 mt-12 text-center text-[11px] text-neutral-400 dark:text-neutral-500 font-medium">
-        Generador de Catálogos de Productos &copy; {new Date().getFullYear()} • Modo Smartphone, Dark Negro y Blanco & IA.
+      {/* FOOTER */}
+      <footer className="bg-white dark:bg-neutral-900 border-t border-neutral-100 dark:border-neutral-800 py-4 mt-12 text-center text-[11px] text-neutral-400 dark:text-neutral-500 font-medium transition-colors">
+        Generador de Catálogos de Productos &copy; {new Date().getFullYear()} • Desarrollado con Inteligencia Artificial.
       </footer>
 
-      {/* SMARTPHONE FIXED BOTTOM NAVIGATION BAR */}
-      <nav
-        id="mobile-bottom-nav"
-        className="fixed bottom-0 inset-x-0 z-40 bg-white/95 dark:bg-[#0a0a0a]/95 backdrop-blur-lg border-t border-neutral-200 dark:border-neutral-800 pb-safe lg:hidden shadow-lg transition-colors"
-      >
-        <div className="grid grid-cols-4 items-center h-14">
-          {/* Tab 1: Tienda */}
-          <button
-            type="button"
-            onClick={() => setMobileTab('store')}
-            className={`flex flex-col items-center justify-center h-full transition relative ${
-              mobileTab === 'store'
-                ? 'text-neutral-950 dark:text-white font-bold'
-                : 'text-neutral-400 dark:text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300'
-            }`}
-          >
-            {mobileTab === 'store' && (
-              <span className="absolute top-0 inset-x-4 h-0.5 bg-neutral-950 dark:bg-white rounded-full" />
-            )}
-            <Store className="w-4 h-4" />
-            <span className="text-[10px] mt-1 tracking-tight">Tienda</span>
-          </button>
-
-          {/* Tab 2: Cargar */}
-          <button
-            type="button"
-            onClick={() => setMobileTab('upload')}
-            className={`flex flex-col items-center justify-center h-full transition relative ${
-              mobileTab === 'upload'
-                ? 'text-neutral-950 dark:text-white font-bold'
-                : 'text-neutral-400 dark:text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300'
-            }`}
-          >
-            {mobileTab === 'upload' && (
-              <span className="absolute top-0 inset-x-4 h-0.5 bg-neutral-950 dark:bg-white rounded-full" />
-            )}
-            <Upload className="w-4 h-4" />
-            <span className="text-[10px] mt-1 tracking-tight">Cargar</span>
-          </button>
-
-          {/* Tab 3: Productos */}
-          <button
-            type="button"
-            onClick={() => setMobileTab('products')}
-            className={`flex flex-col items-center justify-center h-full transition relative ${
-              mobileTab === 'products'
-                ? 'text-neutral-950 dark:text-white font-bold'
-                : 'text-neutral-400 dark:text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300'
-            }`}
-          >
-            {mobileTab === 'products' && (
-              <span className="absolute top-0 inset-x-4 h-0.5 bg-neutral-950 dark:bg-white rounded-full" />
-            )}
-            <div className="relative">
-              <Package className="w-4 h-4" />
-              {products.length > 0 && (
-                <span className="absolute -top-1.5 -right-2.5 bg-neutral-900 dark:bg-white text-white dark:text-black text-[9px] font-bold px-1 rounded-full min-w-[14px] text-center shadow-xs">
-                  {products.length}
-                </span>
-              )}
-            </div>
-            <span className="text-[10px] mt-1 tracking-tight">Productos</span>
-          </button>
-
-          {/* Tab 4: Vista Previa */}
-          <button
-            type="button"
-            onClick={() => setMobileTab('preview')}
-            className={`flex flex-col items-center justify-center h-full transition relative ${
-              mobileTab === 'preview'
-                ? 'text-neutral-950 dark:text-white font-bold'
-                : 'text-neutral-400 dark:text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300'
-            }`}
-          >
-            {mobileTab === 'preview' && (
-              <span className="absolute top-0 inset-x-4 h-0.5 bg-neutral-950 dark:bg-white rounded-full" />
-            )}
-            <Eye className="w-4 h-4" />
-            <span className="text-[10px] mt-1 tracking-tight">Ver Tienda</span>
-          </button>
-        </div>
-      </nav>
+      {/* SELLER REGISTRATION & LOGIN MODAL */}
+      <SellerAuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
+        onSuccess={handleAuthSuccess}
+      />
 
       {/* SHARE MODAL */}
       {isShareModalOpen && (
-        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-150">
-          <div className="bg-white dark:bg-[#0e0e10] text-neutral-900 dark:text-white rounded-t-3xl sm:rounded-2xl max-w-md w-full p-5 sm:p-6 shadow-2xl border border-neutral-100 dark:border-neutral-800 relative space-y-4 pb-safe sm:pb-6">
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-neutral-900 rounded-2xl max-w-md w-full p-6 shadow-2xl border border-neutral-100 dark:border-neutral-850 relative space-y-4 text-neutral-900 dark:text-neutral-100 transition-colors">
             <button
               onClick={() => setIsShareModalOpen(false)}
-              className="absolute top-4 right-4 text-neutral-400 hover:text-neutral-600 dark:hover:text-white p-2 rounded-xl hover:bg-neutral-50 dark:hover:bg-neutral-800 transition"
+              className="absolute top-4 right-4 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 p-1 rounded-lg hover:bg-neutral-50 dark:hover:bg-neutral-800 transition cursor-pointer"
             >
               <X className="w-5 h-5" />
             </button>
 
-            <div className="text-center space-y-2 pt-2 sm:pt-0">
-              <div className="w-12 h-12 bg-green-50 dark:bg-green-950/40 text-green-600 dark:text-green-400 rounded-full flex items-center justify-center mx-auto">
+            <div className="text-center space-y-2">
+              <div className="w-12 h-12 bg-green-50 dark:bg-green-950 text-green-600 dark:text-green-400 rounded-full flex items-center justify-center mx-auto shadow-sm">
                 <Check className="w-6 h-6" />
               </div>
-              <h3 className="text-base sm:text-lg font-bold text-neutral-800 dark:text-white">¡Catálogo Publicado!</h3>
-              <p className="text-xs text-neutral-500 dark:text-neutral-400 max-w-xs mx-auto">
-                Tu catálogo interactivo está listo para ser compartido por WhatsApp o redes sociales.
+              <h3 className="text-lg font-bold">¡Catálogo Publicado Exitosamente!</h3>
+              <p className="text-xs text-neutral-500 dark:text-neutral-400 max-w-sm mx-auto">
+                Tu catálogo interactivo está guardado de forma segura en la nube y listo para ser compartido con tus clientes.
               </p>
             </div>
 
             {/* Link Box */}
-            <div className="bg-neutral-50 dark:bg-black/50 border border-neutral-100 dark:border-neutral-800 rounded-xl p-3 space-y-2">
-              <span className="text-[10px] font-bold text-neutral-400 dark:text-neutral-500 uppercase tracking-wider block">Link de Acceso Clientes</span>
+            <div className="bg-neutral-50 dark:bg-neutral-950 border border-neutral-100 dark:border-neutral-850 rounded-xl p-3.5 space-y-2.5">
+              <span className="text-[10px] font-bold text-neutral-400 dark:text-neutral-500 uppercase tracking-wider block">Enlace de Acceso Clientes</span>
               <div className="flex gap-2">
                 <input
                   type="text"
                   readOnly
                   value={shareUrl}
-                  className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 text-xs text-neutral-600 dark:text-neutral-300 px-3 py-2 rounded-lg flex-1 outline-none font-mono truncate"
+                  className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 text-xs text-neutral-600 dark:text-neutral-300 px-3 py-2 rounded-lg flex-1 outline-none font-mono"
                 />
                 <button
                   onClick={handleCopyLink}
-                  className="bg-neutral-900 hover:bg-neutral-800 dark:bg-white dark:hover:bg-neutral-200 text-white dark:text-black text-xs font-semibold px-3 py-2 rounded-lg transition inline-flex items-center gap-1.5 shrink-0"
+                  className="bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 text-xs font-semibold px-3 py-2 rounded-lg transition inline-flex items-center gap-1.5 cursor-pointer hover:opacity-90"
                 >
-                  {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                  {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
                   {copied ? 'Copiado' : 'Copiar'}
                 </button>
               </div>
@@ -968,16 +643,16 @@ export default function App() {
             <div className="grid grid-cols-2 gap-2">
               <button
                 onClick={handleShareToWhatsApp}
-                className="bg-green-600 hover:bg-green-500 text-white font-semibold text-xs py-3 px-4 rounded-xl transition inline-flex items-center justify-center gap-1.5 shadow active:scale-95"
+                className="bg-green-600 hover:bg-green-500 text-white font-semibold text-xs py-2.5 px-4 rounded-xl transition inline-flex items-center justify-center gap-1.5 shadow cursor-pointer"
               >
-                <Share2 className="w-4 h-4" />
+                <Share2 className="w-4 h-4 text-white" />
                 WhatsApp
               </button>
               <a
                 href={shareUrl}
                 target="_blank"
                 rel="noreferrer"
-                className="bg-neutral-100 hover:bg-neutral-200 dark:bg-neutral-800 dark:hover:bg-neutral-700 text-neutral-800 dark:text-neutral-200 font-semibold text-xs py-3 px-4 rounded-xl transition inline-flex items-center justify-center gap-1.5 active:scale-95"
+                className="bg-neutral-100 dark:bg-neutral-800 hover:bg-neutral-250 dark:hover:bg-neutral-700 text-neutral-800 dark:text-neutral-200 font-semibold text-xs py-2.5 px-4 rounded-xl transition inline-flex items-center justify-center gap-1.5"
               >
                 <ExternalLink className="w-4 h-4" />
                 Abrir Catálogo
@@ -991,10 +666,10 @@ export default function App() {
                   setSavedCatalogId(null);
                   setIsPdfModalOpen(true);
                 }}
-                className="w-full bg-neutral-50 hover:bg-neutral-100 dark:bg-neutral-800/60 dark:hover:bg-neutral-800 text-neutral-700 dark:text-neutral-300 text-xs font-semibold py-2.5 px-4 rounded-xl border border-neutral-200 dark:border-neutral-700 transition inline-flex items-center justify-center gap-2"
+                className="w-full bg-neutral-50 dark:bg-neutral-800 hover:bg-neutral-100 dark:hover:bg-neutral-700 text-neutral-700 dark:text-neutral-300 text-xs font-semibold py-2.5 px-4 rounded-xl border border-neutral-200 dark:border-neutral-750 transition inline-flex items-center justify-center gap-2 cursor-pointer"
               >
-                <FileDown className="w-4 h-4 text-blue-500" />
-                Descargar Catálogo en PDF
+                <FileDown className="w-4 h-4 text-blue-600" />
+                Descargar Catálogo en PDF (Impresión / Offline)
               </button>
             </div>
           </div>

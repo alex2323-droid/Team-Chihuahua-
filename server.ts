@@ -1,7 +1,6 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
-import crypto from "crypto";
 import { fileURLToPath } from "url";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
@@ -21,6 +20,7 @@ app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
 // File-based database for catalogs
 const DB_FILE = path.join(process.cwd(), "catalogs_db.json");
+const SELLERS_FILE = path.join(process.cwd(), "sellers_db.json");
 
 // Helper to read database
 function readDatabase() {
@@ -44,80 +44,27 @@ function writeDatabase(data: any) {
   }
 }
 
-// ----------------------------------------------------------------------------
-// Seller Authentication & Password Hashing Utilities
-// ----------------------------------------------------------------------------
-
-function hashPassword(password: string, salt?: string): { hash: string; salt: string } {
-  const s = salt || crypto.randomBytes(16).toString("hex");
-  const hash = crypto.pbkdf2Sync(password, s, 1000, 64, "sha512").toString("hex");
-  return { hash, salt: s };
-}
-
-function verifyPassword(password: string, hash: string, salt: string): boolean {
+// Helper to read sellers database
+function readSellers() {
   try {
-    const check = crypto.pbkdf2Sync(password, salt, 1000, 64, "sha512").toString("hex");
-    return check === hash;
-  } catch {
-    return false;
+    if (fs.existsSync(SELLERS_FILE)) {
+      const data = fs.readFileSync(SELLERS_FILE, "utf-8");
+      return JSON.parse(data);
+    }
+  } catch (error) {
+    console.error("Error reading sellers database:", error);
   }
+  return {};
 }
 
-function generateToken(): string {
-  return crypto.randomBytes(32).toString("hex");
-}
-
-function getSellerFromRequest(req: express.Request, db: any) {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return null;
-  }
-  const token = authHeader.substring(7).trim();
-  const sessions = db["_sessions"] || {};
-  const session = sessions[token];
-  if (!session) return null;
-
-  if (session.expiresAt && new Date(session.expiresAt) < new Date()) {
-    return null;
-  }
-
-  const sellers = db["_sellers"] || {};
-  const seller = sellers[session.sellerId];
-  if (!seller) return null;
-
-  return { seller, token };
-}
-
-// Initialize default demo seller account if no sellers exist
-function initializeDefaultSellerIfNeeded() {
+// Helper to write to sellers database
+function writeSellers(data: any) {
   try {
-    const db = readDatabase();
-    if (!db["_sellers"]) {
-      db["_sellers"] = {};
-    }
-    const sellers = Object.values(db["_sellers"]) as any[];
-    if (sellers.length === 0) {
-      const { hash, salt } = hashPassword("123456");
-      const defaultSellerId = "seller-admin-01";
-      db["_sellers"][defaultSellerId] = {
-        id: defaultSellerId,
-        username: "vendedor",
-        email: "vendedor@catalogo.com",
-        name: "Vendedor Principal",
-        storeName: "Boutique Bella Vista",
-        passwordHash: hash,
-        salt: salt,
-        createdAt: new Date().toISOString()
-      };
-      writeDatabase(db);
-      console.log("[Auth] Creada cuenta inicial de vendedor demo: usuario='vendedor', clave='123456'");
-    }
-  } catch (err) {
-    console.error("[Auth] Error al inicializar cuenta de vendedor:", err);
+    fs.writeFileSync(SELLERS_FILE, JSON.stringify(data, null, 2), "utf-8");
+  } catch (error) {
+    console.error("Error writing to sellers database:", error);
   }
 }
-
-initializeDefaultSellerIfNeeded();
 
 // Initialize Gemini client on the server
 // Always lazy load / verify key is present when endpoint is called to avoid startup crash
@@ -341,10 +288,9 @@ app.post("/api/analyze-image", async (req, res) => {
     };
 
     const modelsToTry = [
-      "gemini-3.1-flash-lite",
-      "gemini-3.5-flash-lite",
       "gemini-3.8-flash",
-      "gemini-flash-latest"
+      "gemini-3.1-flash-lite",
+      "gemini-3.5-flash"
     ];
 
     let response = null;
@@ -352,56 +298,34 @@ app.post("/api/analyze-image", async (req, res) => {
 
     for (const modelName of modelsToTry) {
       try {
-        console.log(`Intentando análisis de imagen con: ${modelName}...`);
+        console.log(`Intentando análisis con modelo: ${modelName}...`);
         response = await ai.models.generateContent({
           model: modelName,
           ...modelParams
         });
         if (response && response.text) {
-          console.log(`Análisis exitoso con: ${modelName}`);
+          console.log(`Análisis exitoso con modelo: ${modelName}`);
           break;
         }
       } catch (err: any) {
-        console.warn(`El modelo ${modelName} tuvo aviso/cuota:`, err.message);
+        console.warn(`El modelo ${modelName} falló:`, err.message);
         lastError = err;
       }
     }
 
-    if (response && response.text) {
-      const resultText = response.text;
-      const jsonResponse = sanitizeProductPayload(JSON.parse(resultText), priceHint);
-      return res.json(jsonResponse);
+    if (!response || !response.text) {
+      throw new Error(lastError ? lastError.message : "Todos los modelos de Gemini fallaron o se encuentran saturados.");
     }
 
-    // Seamless Fallback when API quotas are temporarily exhausted
-    console.log("Aviso: Cuota de Gemini alcanzada en escáner de imagen, aplicando formateo local seguro...");
-    const fallbackData = {
-      name: "Producto Nuevo",
-      description: "Producto agregado al catálogo listo para edición y venta.",
-      sku: `PROD-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
-      imageQuality: "Good",
-      attributes: {
-        colors: ["Estándar"],
-        sizes: ["Disponible"],
-        brand: "Importado",
-        features: ["Calidad garantizada", "Listo para encargar"]
-      }
-    };
-    return res.json(sanitizeProductPayload(fallbackData, priceHint));
+    const resultText = response.text;
+    const jsonResponse = sanitizeProductPayload(JSON.parse(resultText), priceHint);
+    res.json(jsonResponse);
   } catch (error: any) {
-    console.log("Aviso: Error en endpoint analyze-image, retornando producto base seguro:", error.message);
-    const safeProduct = {
-      name: "Producto Nuevo",
-      description: "Producto agregado al catálogo.",
-      sku: `PROD-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
-      imageQuality: "Good",
-      attributes: {
-        colors: ["Estándar"],
-        brand: "Importado",
-        features: ["Listo para encargar"]
-      }
-    };
-    return res.json(sanitizeProductPayload(safeProduct, req.body?.priceHint));
+    console.log("Aviso: El escáner de imagen superó límites de cuota, activando fallback local...");
+    res.status(500).json({ 
+      error: "El servicio de análisis de IA se encuentra saturado. Se ha agregado como producto manual para que lo edites.", 
+      details: error.message 
+    });
   }
 });
 
@@ -451,32 +375,24 @@ app.get("/api/proxy-image", async (req, res) => {
   }
 });
 
-// In-memory cache for ultra-fast repeated URL lookups (30 minutes TTL)
-interface CachedUrlAnalysis {
-  data: any;
-  timestamp: number;
-}
-const urlAnalysisCache = new Map<string, CachedUrlAnalysis>();
-const URL_CACHE_TTL = 30 * 60 * 1000;
-
 // Helper function to extract OpenGraph & clean product images from webpages (Temu, AliExpress, etc.)
 async function scrapeProductMetadata(url: string) {
   try {
-    console.log(`[Scraper] Extracción rápida para: ${url}`);
+    console.log(`[Scraper] Iniciando extracción como filtro estricto para: ${url}`);
     
-    // Fetch with a real desktop user-agent, lightweight headers, and strict 2s timeout
+    // Fetch with a real desktop user-agent to bypass basic scrape protection, with a 3.5s timeout
     const res = await fetch(url, {
       headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
         "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
       },
       redirect: "follow",
-      signal: AbortSignal.timeout(2000)
+      signal: AbortSignal.timeout(3500)
     });
 
     if (!res.ok) {
-      console.log(`[Scraper] Estado no OK: ${res.status}`);
+      console.log(`[Scraper] El servidor respondió con estado: ${res.status}`);
       return null;
     }
 
@@ -605,14 +521,17 @@ async function scrapeProductMetadata(url: string) {
       const candLower = cand.toLowerCase();
 
       if (url.toLowerCase().includes("temu")) {
+        // Must belong to Temu CDN
         const isTemuCdn = candLower.includes("kwcdn.com") || candLower.includes("aimg.kwcdn.com") || candLower.includes("img.kwcdn.com");
         if (!isTemuCdn) continue;
         
+        // Prioritize actual product commodity or goods photos
         const isProductImage = candLower.includes("/commodity/") || candLower.includes("/goods/");
         if (isProductImage && !cleanCandidates.includes(cand)) {
           cleanCandidates.push(cand);
         }
       } else {
+        // Generic store: must be clean image
         if (!cleanCandidates.includes(cand)) {
           cleanCandidates.push(cand);
         }
@@ -620,25 +539,30 @@ async function scrapeProductMetadata(url: string) {
     }
     
     if (cleanCandidates.length > 0) {
+      console.log(`[Scraper] Éxito - Encontradas ${cleanCandidates.length} imágenes limpias de alta calidad. Seleccionada: ${cleanCandidates[0]}`);
       imageUrl = cleanCandidates[0];
     } else if (imageUrl && !isImageDisallowed(imageUrl)) {
       imageUrl = cleanMasterImageUrl(imageUrl);
+      console.log(`[Scraper] Seleccionada imagen base verificada: ${imageUrl}`);
     }
 
+    // FINAL STRICT SCRUB: Purges all e-commerce brand mentions, UI text, and pricing
     title = cleanScrub(title);
     description = cleanScrub(description);
 
+    console.log(`[Scraper] Filtro estricto completado: Título="${title.substring(0, 50)}...", Imagen="${imageUrl.substring(0, 50)}..."`);
+    
     if (title || imageUrl) {
       return { title, imageUrl, description };
     }
     return null;
   } catch (error: any) {
-    console.log(`[Scraper] Aviso extracción rápida:`, error.message);
+    console.log(`[Scraper] Error durante la extracción de metadatos:`, error.message);
     return null;
   }
 }
 
-// 1b. Ultra-fast product URL analysis using AI + Scraper pipeline
+// 1b. Analyze product URL using AI as a strict filter (discards metadata, prices, logos, UI, watermarks)
 app.post("/api/analyze-url", async (req, res) => {
   const { url, priceHint, systemPrompt } = req.body;
 
@@ -646,20 +570,10 @@ app.post("/api/analyze-url", async (req, res) => {
     return res.status(400).json({ error: "Falta el enlace (URL) del producto." });
   }
 
-  const cleanUrl = url.trim();
+  // 1. SCRAPE DIRECT METADATA FROM URL
+  const scraped = await scrapeProductMetadata(url);
 
-  // 1. FAST CACHE CHECK (Sub-millisecond response for repeated or revised URLs)
-  const cached = urlAnalysisCache.get(cleanUrl);
-  if (cached && Date.now() - cached.timestamp < URL_CACHE_TTL) {
-    console.log(`[Analyze-URL] Retornando desde caché instantáneo`);
-    const sanitizedCached = sanitizeProductPayload({ ...cached.data }, priceHint, cached.data.imageUrl);
-    return res.json(sanitizedCached);
-  }
-
-  // 2. SCRAPE DIRECT METADATA FROM URL
-  const scraped = await scrapeProductMetadata(cleanUrl);
-
-  // 3. Fallback information extractor
+  // 2. Setup extraction safety net info
   const extractWordsFromUrl = (targetUrl: string): { name: string; category: string; placeholder: string } => {
     try {
       if (scraped && scraped.title) {
@@ -715,7 +629,7 @@ app.post("/api/analyze-url", async (req, res) => {
     }
   };
 
-  const localInfo = extractWordsFromUrl(cleanUrl);
+  const localInfo = extractWordsFromUrl(url);
 
   // STRICT FILTER SYSTEM INSTRUCTION
   const activeSystemInstruction = systemPrompt || STRICT_SYSTEM_PROMPT;
@@ -724,7 +638,7 @@ app.post("/api/analyze-url", async (req, res) => {
 ${activeSystemInstruction}
 
 Datos extraídos del producto:
-- URL de origen: ${cleanUrl}
+- URL de origen: ${url}
 ${scraped?.title ? `- Título extraído de la página: "${scraped.title}"` : ''}
 ${scraped?.imageUrl ? `- URL directa de imagen limpia: "${scraped.imageUrl}"` : ''}
 - Precio de venta fijado por el usuario: ${priceHint !== undefined ? priceHint : 0}
@@ -733,7 +647,7 @@ INSTRUCCIONES DE RESPUESTA:
 1. "name": Devuelve EXCLUSIVAMENTE el nombre comercial limpio y vendedor en español (máximo 45 caracteres), sin mención a tiendas (ej. Temu), sin precios y sin marcas de agua.
 2. "imageUrl": Devuelve solo la URL directa de la imagen principal en alta resolución limpia${scraped?.imageUrl ? ` (usa exactamente "${scraped.imageUrl}")` : ''}, libre de logos o marcas de agua.
 3. "description": Breve descripción comercial (1-2 oraciones) orientada a la venta, sin tiendas ni precios.
-4. "price": ${priceHint || 0}
+4. "price": ${priceHint || 0} (estrictamente el precio del usuario, descartando el original).
 5. "sku": Código SKU limpio tipo IMP-XXXX.
 6. "attributes": Marca comercial o "Importado", colores y características físicas reales.`;
 
@@ -742,30 +656,30 @@ INSTRUCCIONES DE RESPUESTA:
     properties: {
       name: { 
         type: Type.STRING, 
-        description: "Título comercial limpio del producto en español." 
+        description: "Título comercial exclusivo, limpio y directo del producto en español, sin marcas de tiendas externas ni precios." 
       },
       imageUrl: { 
         type: Type.STRING, 
-        description: "URL directa de la fotografía de alta resolución." 
+        description: "URL directa de la fotografía de alta calidad del producto físico sin marcas de agua, logos ni banners." 
       },
       description: { 
         type: Type.STRING, 
-        description: "Descripción comercial concisa de 1 a 2 oraciones." 
+        description: "Descripción comercial concisa de 1 a 2 oraciones orientada a venta, sin tiendas ni precios." 
       },
       price: {
         type: Type.NUMBER,
-        description: "Precio de venta."
+        description: "Precio de venta fijado por el usuario."
       },
       sku: { 
         type: Type.STRING, 
-        description: "Código SKU." 
+        description: "Código SKU en formato IMP-XXXX." 
       },
       attributes: {
         type: Type.OBJECT,
         properties: {
           colors: { type: Type.ARRAY, items: { type: Type.STRING } },
           sizes: { type: Type.ARRAY, items: { type: Type.STRING } },
-          brand: { type: Type.STRING },
+          brand: { type: Type.STRING, description: "Marca comercial física o 'Importado'." },
           model: { type: Type.STRING },
           features: { type: Type.ARRAY, items: { type: Type.STRING } }
         }
@@ -774,48 +688,36 @@ INSTRUCCIONES DE RESPUESTA:
     required: ["name", "imageUrl"]
   };
 
-  // 4. ULTRA-FAST GEMINI SYNTHESIS WITH STRICT TIMEOUT (Priority to high-quota flash-lite)
-  const models = ["gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-flash-latest"];
+  // STAGE 1: Direct Gemini analysis acting as a strict filter
+  const models = ["gemini-3.8-flash", "gemini-3.1-flash-lite", "gemini-3.5-flash"];
   for (const modelName of models) {
     try {
-      console.log(`[Analyze-URL] Procesando con ${modelName}...`);
+      console.log(`[Stage 1] Aplicando filtro estricto con ${modelName}...`);
       const ai = getGeminiClient();
-
-      const aiPromise = ai.models.generateContent({
+      const response = await ai.models.generateContent({
         model: modelName,
         contents: promptText,
         config: {
           systemInstruction: activeSystemInstruction,
           responseMimeType: "application/json",
-          responseSchema: sharedSchema,
-          temperature: 0.1,
-          maxOutputTokens: 350
+          responseSchema: sharedSchema
         }
       });
 
-      // Strict 2.5s race timeout so response is delivered rapidly
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("Timeout Gemini")), 2500)
-      );
-
-      const response: any = await Promise.race([aiPromise, timeoutPromise]);
-
       if (response && response.text) {
-        console.log(`[Analyze-URL] Éxito con ${modelName}`);
+        console.log(`[Stage 1] Filtrado exitoso con ${modelName}`);
         const parsed = JSON.parse(response.text);
         const sanitized = sanitizeProductPayload(parsed, priceHint, scraped?.imageUrl);
-        
-        // Cache result
-        urlAnalysisCache.set(cleanUrl, { data: sanitized, timestamp: Date.now() });
         return res.json(sanitized);
       }
     } catch (err: any) {
-      console.log(`[Analyze-URL] Modelo ${modelName} completó/saltó:`, err.message);
+      console.log(`[Stage 1] Modelo ${modelName} no disponible, intentando siguiente...`);
     }
   }
 
-  // 5. RAPID HEURISTIC FALLBACK (Zero-delay delivery with 100% clean formatting)
+  // STAGE 3: Offline Local Backup Parsing (Guaranteed Success - Zero API limits)
   try {
+    console.log(`[Stage 3] Recurriendo a filtro estricto local offline`);
     const skuRandom = `IMP-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
     const localRaw = {
       name: localInfo.name,
@@ -833,15 +735,14 @@ INSTRUCCIONES DE RESPUESTA:
       }
     };
     const sanitized = sanitizeProductPayload(localRaw, priceHint, scraped?.imageUrl);
-    urlAnalysisCache.set(cleanUrl, { data: sanitized, timestamp: Date.now() });
     return res.json(sanitized);
   } catch (error: any) {
-    console.error("Fallo crítico en Fallback:", error);
+    console.error("Fallo crítico en Stage 3:", error);
     res.status(500).json({ error: "No se pudo procesar el enlace." });
   }
 });
 
-// 2. Save a catalog (Public or Seller)
+// 2. Save a catalog
 app.post("/api/catalogs", (req, res) => {
   try {
     const { id, business, settings, products } = req.body;
@@ -852,567 +753,24 @@ app.post("/api/catalogs", (req, res) => {
 
     const db = readDatabase();
     
-    // Check if authenticated seller is saving
-    const authData = getSellerFromRequest(req, db);
-    const sellerId = authData?.seller?.id;
-
-    // Generate a unique ID if not provided or use seller id
-    const catalogId = id || (sellerId ? `cat-${sellerId.replace('seller-', '')}` : Math.random().toString(36).substring(2, 10).toUpperCase());
+    // Generate a unique ID if not provided
+    const catalogId = id || Math.random().toString(36).substring(2, 10).toUpperCase();
 
     const catalogData = {
       id: catalogId,
-      sellerId: sellerId || null,
       business,
       settings,
       products,
-      updatedAt: new Date().toISOString(),
-      createdAt: db[catalogId]?.createdAt || new Date().toISOString()
+      createdAt: new Date().toISOString()
     };
 
     db[catalogId] = catalogData;
-
-    // Also persist under seller's private space if authenticated
-    if (sellerId) {
-      if (!db["_sellers_catalogs"]) db["_sellers_catalogs"] = {};
-      db["_sellers_catalogs"][sellerId] = catalogData;
-    }
-
     writeDatabase(db);
 
     res.json({ success: true, id: catalogId, catalog: catalogData });
   } catch (error: any) {
     console.error("Error al guardar el catálogo:", error);
     res.status(500).json({ error: "No se pudo guardar el catálogo.", details: error.message });
-  }
-});
-
-// ============================================================================
-// DEDICATED SELLER CATALOG ENDPOINTS (Carga y Guardado Automático por Vendedor)
-// ============================================================================
-
-// Obtener el catálogo y productos del vendedor autenticado
-app.get("/api/seller/catalog", (req, res) => {
-  try {
-    const db = readDatabase();
-    const authData = getSellerFromRequest(req, db);
-
-    if (!authData) {
-      return res.status(401).json({ error: "No autorizado. Inicia sesión como vendedor." });
-    }
-
-    const { seller } = authData;
-    if (!db["_sellers_catalogs"]) db["_sellers_catalogs"] = {};
-
-    let sellerCatalog = db["_sellers_catalogs"][seller.id];
-
-    if (!sellerCatalog) {
-      // Create initial catalog for new seller
-      const catalogId = `cat-${seller.id.replace('seller-', '')}`;
-      sellerCatalog = {
-        id: catalogId,
-        sellerId: seller.id,
-        business: {
-          name: seller.storeName || `Tienda ${seller.name}`,
-          tagline: "Calidad garantizada y entregas directas",
-          whatsapp: "",
-          email: seller.email || "",
-          address: "",
-          instagram: "",
-          facebook: "",
-          website: "",
-          announcement: "¡Bienvenidos a nuestro catálogo oficial! Haz tus pedidos fácilmente.",
-          showAnnouncement: true,
-          additionalInfo: ""
-        },
-        settings: {
-          currency: "USD",
-          theme: "light",
-          darkMode: false,
-          enableSearch: true,
-          enableFilters: true,
-          enableCart: true,
-          itemsPerPage: 12,
-          defaultSort: "featured",
-          showPrices: true,
-          showSKU: true,
-          showStock: true,
-          accentColor: "#000000"
-        },
-        products: [],
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-
-      db["_sellers_catalogs"][seller.id] = sellerCatalog;
-      db[catalogId] = sellerCatalog;
-      writeDatabase(db);
-    }
-
-    return res.json({
-      success: true,
-      catalog: sellerCatalog,
-    });
-  } catch (error: any) {
-    console.error("[Seller Catalog GET Error]:", error);
-    return res.status(500).json({ error: "Error al recuperar el catálogo del vendedor." });
-  }
-});
-
-// Guardar/Actualizar catálogo completo de productos del vendedor autenticado
-app.post("/api/seller/catalog", (req, res) => {
-  try {
-    const db = readDatabase();
-    const authData = getSellerFromRequest(req, db);
-
-    if (!authData) {
-      return res.status(401).json({ error: "No autorizado. Inicia sesión como vendedor." });
-    }
-
-    const { seller } = authData;
-    const { business, settings, products, id } = req.body;
-
-    if (!db["_sellers_catalogs"]) db["_sellers_catalogs"] = {};
-
-    const existingCatalog = db["_sellers_catalogs"][seller.id] || {};
-    const catalogId = id || existingCatalog.id || `cat-${seller.id.replace('seller-', '')}`;
-
-    const updatedCatalog = {
-      id: catalogId,
-      sellerId: seller.id,
-      business: business || existingCatalog.business || { name: seller.storeName || seller.name },
-      settings: settings || existingCatalog.settings || {},
-      products: Array.isArray(products) ? products : (existingCatalog.products || []),
-      createdAt: existingCatalog.createdAt || new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-
-    db["_sellers_catalogs"][seller.id] = updatedCatalog;
-    db[catalogId] = updatedCatalog; // Sync public catalog route too
-
-    writeDatabase(db);
-
-    console.log(`[Seller Catalog] Guardados ${updatedCatalog.products.length} productos en el catálogo de ${seller.username} (ID: ${catalogId})`);
-
-    return res.json({
-      success: true,
-      message: "Catálogo de productos guardado exitosamente en tu cuenta.",
-      catalogId,
-      catalog: updatedCatalog,
-    });
-  } catch (error: any) {
-    console.error("[Seller Catalog Save Error]:", error);
-    return res.status(500).json({ error: "Error al guardar el catálogo en tu cuenta de vendedor." });
-  }
-});
-
-// Agregar o actualizar un producto individual directamente en el catálogo del vendedor
-app.post("/api/seller/products", (req, res) => {
-  try {
-    const db = readDatabase();
-    const authData = getSellerFromRequest(req, db);
-
-    if (!authData) {
-      return res.status(401).json({ error: "No autorizado. Inicia sesión como vendedor." });
-    }
-
-    const { seller } = authData;
-    const { product } = req.body;
-
-    if (!product || !product.id || !product.name) {
-      return res.status(400).json({ error: "Faltan datos obligatorios del producto (id, name)." });
-    }
-
-    if (!db["_sellers_catalogs"]) db["_sellers_catalogs"] = {};
-    const existingCatalog = db["_sellers_catalogs"][seller.id] || {
-      id: `cat-${seller.id.replace('seller-', '')}`,
-      sellerId: seller.id,
-      products: [],
-      business: { name: seller.storeName || seller.name },
-      settings: {}
-    };
-
-    const products: any[] = existingCatalog.products || [];
-    const prodIndex = products.findIndex((p: any) => p.id === product.id);
-
-    if (prodIndex >= 0) {
-      products[prodIndex] = { ...products[prodIndex], ...product, updatedAt: new Date().toISOString() };
-    } else {
-      products.unshift({ ...product, createdAt: new Date().toISOString() });
-    }
-
-    existingCatalog.products = products;
-    existingCatalog.updatedAt = new Date().toISOString();
-
-    db["_sellers_catalogs"][seller.id] = existingCatalog;
-    db[existingCatalog.id] = existingCatalog;
-    writeDatabase(db);
-
-    return res.json({
-      success: true,
-      message: `Producto "${product.name}" guardado exitosamente en tu catálogo.`,
-      product,
-      catalogId: existingCatalog.id,
-      totalProducts: products.length,
-    });
-  } catch (error: any) {
-    console.error("[Seller Add Product Error]:", error);
-    return res.status(500).json({ error: "Error al guardar el producto en el catálogo." });
-  }
-});
-
-// Eliminar un producto del catálogo del vendedor
-app.delete("/api/seller/products/:productId", (req, res) => {
-  try {
-    const db = readDatabase();
-    const authData = getSellerFromRequest(req, db);
-
-    if (!authData) {
-      return res.status(401).json({ error: "No autorizado. Inicia sesión como vendedor." });
-    }
-
-    const { seller } = authData;
-    const { productId } = req.params;
-
-    if (!db["_sellers_catalogs"] || !db["_sellers_catalogs"][seller.id]) {
-      return res.status(404).json({ error: "No se encontró el catálogo del vendedor." });
-    }
-
-    const catalog = db["_sellers_catalogs"][seller.id];
-    catalog.products = (catalog.products || []).filter((p: any) => p.id !== productId);
-    catalog.updatedAt = new Date().toISOString();
-
-    db["_sellers_catalogs"][seller.id] = catalog;
-    db[catalog.id] = catalog;
-    writeDatabase(db);
-
-    return res.json({
-      success: true,
-      message: "Producto eliminado correctamente de tu catálogo.",
-      totalProducts: catalog.products.length,
-    });
-  } catch (error: any) {
-    console.error("[Seller Delete Product Error]:", error);
-    return res.status(500).json({ error: "Error al eliminar el producto." });
-  }
-});
-
-// 2.1 Store Profile: Get global store profile (business, contacts, logo, settings)
-app.get("/api/store-profile", (req, res) => {
-  try {
-    const db = readDatabase();
-    const profile = db["_store_profile"] || null;
-    res.json({ success: true, profile });
-  } catch (error: any) {
-    console.error("Error al recuperar perfil de la tienda:", error);
-    res.status(500).json({ error: "No se pudo recuperar la configuración de la tienda." });
-  }
-});
-
-// 2.2 Store Profile: Save or update global store profile
-app.post("/api/store-profile", (req, res) => {
-  try {
-    const { business, settings } = req.body;
-    if (!business) {
-      return res.status(400).json({ error: "Faltan datos de la tienda para guardar." });
-    }
-
-    const db = readDatabase();
-    const currentProfile = db["_store_profile"] || {};
-
-    const updatedProfile = {
-      business: { ...currentProfile.business, ...business },
-      settings: settings ? { ...currentProfile.settings, ...settings } : currentProfile.settings,
-      updatedAt: new Date().toISOString()
-    };
-
-    db["_store_profile"] = updatedProfile;
-    writeDatabase(db);
-
-    res.json({ 
-      success: true, 
-      message: "Configuración, contactos y logotipo guardados exitosamente.",
-      profile: updatedProfile 
-    });
-  } catch (error: any) {
-    console.error("Error al guardar perfil de la tienda:", error);
-    res.status(500).json({ error: "No se pudo guardar la configuración en el servidor.", details: error.message });
-  }
-});
-
-// ============================================================================
-// SELLER AUTHENTICATION ROUTES (Registro y Login para Vendedores)
-// ============================================================================
-
-// 1. Registro de nuevo Vendedor
-app.post("/api/auth/register", (req, res) => {
-  try {
-    const { username, password, name, storeName, email } = req.body;
-
-    if (!username || typeof username !== "string" || username.trim().length < 3) {
-      return res.status(400).json({ error: "El nombre de usuario debe tener al menos 3 caracteres." });
-    }
-
-    if (!password || typeof password !== "string" || password.length < 4) {
-      return res.status(400).json({ error: "La contraseña debe tener al menos 4 caracteres." });
-    }
-
-    const cleanUsername = username.trim().toLowerCase();
-    const cleanEmail = email && typeof email === "string" ? email.trim().toLowerCase() : `${cleanUsername}@tienda.com`;
-    const cleanName = name && typeof name === "string" ? name.trim() : cleanUsername;
-    const cleanStoreName = storeName && typeof storeName === "string" ? storeName.trim() : `Tienda ${cleanName}`;
-
-    const db = readDatabase();
-    if (!db["_sellers"]) db["_sellers"] = {};
-    if (!db["_sessions"]) db["_sessions"] = {};
-
-    // Check if username already registered
-    const existingSellers = Object.values(db["_sellers"]) as any[];
-    const existingSeller = existingSellers.find(
-      (s) => s.username?.toLowerCase() === cleanUsername
-    );
-
-    if (existingSeller) {
-      // If the password matches, treat as successful login
-      const isMatch = verifyPassword(String(password), existingSeller.passwordHash, existingSeller.salt);
-      if (isMatch) {
-        const token = generateToken();
-        const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-        db["_sessions"][token] = {
-          sellerId: existingSeller.id,
-          username: cleanUsername,
-          createdAt: new Date().toISOString(),
-          expiresAt: expiresAt,
-        };
-        writeDatabase(db);
-        return res.status(200).json({
-          success: true,
-          message: "¡Bienvenido a tu panel de vendedor!",
-          token,
-          seller: {
-            id: existingSeller.id,
-            username: existingSeller.username,
-            email: existingSeller.email,
-            name: existingSeller.name,
-            storeName: existingSeller.storeName,
-            createdAt: existingSeller.createdAt,
-          },
-        });
-      }
-      return res.status(409).json({ error: "El nombre de usuario ya está registrado. Inicia sesión con tu contraseña." });
-    }
-
-    const { hash, salt } = hashPassword(password);
-    const sellerId = `seller-${Math.random().toString(36).substring(2, 10)}`;
-
-    const newSeller = {
-      id: sellerId,
-      username: cleanUsername,
-      email: cleanEmail,
-      name: cleanName,
-      storeName: cleanStoreName,
-      passwordHash: hash,
-      salt: salt,
-      createdAt: new Date().toISOString(),
-    };
-
-    db["_sellers"][sellerId] = newSeller;
-
-    // Create session token (valid for 30 days)
-    const token = generateToken();
-    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-
-    db["_sessions"][token] = {
-      sellerId: sellerId,
-      username: cleanUsername,
-      createdAt: new Date().toISOString(),
-      expiresAt: expiresAt,
-    };
-
-    writeDatabase(db);
-
-    const safeSeller = {
-      id: newSeller.id,
-      username: newSeller.username,
-      email: newSeller.email,
-      name: newSeller.name,
-      storeName: newSeller.storeName,
-      createdAt: newSeller.createdAt,
-    };
-
-    console.log(`[Auth] Nuevo vendedor registrado exitosamente: ${cleanUsername} (${cleanStoreName})`);
-
-    return res.status(201).json({
-      success: true,
-      message: "Registro exitoso. ¡Bienvenido a tu panel de vendedor!",
-      token,
-      seller: safeSeller,
-    });
-  } catch (error: any) {
-    console.error("[Auth Register Error]:", error);
-    return res.status(500).json({ error: "Error interno al procesar el registro de vendedor.", details: error.message });
-  }
-});
-
-// 2. Inicio de Sesión de Vendedor (Login)
-app.post("/api/auth/login", (req, res) => {
-  try {
-    const { username, password } = req.body;
-
-    if (!username || !password) {
-      return res.status(400).json({ error: "Por favor proporciona usuario y contraseña." });
-    }
-
-    const cleanInput = String(username).trim().toLowerCase();
-    const db = readDatabase();
-    const sellers = db["_sellers"] || {};
-    const sellerList = Object.values(sellers) as any[];
-
-    // Find seller by username or email
-    const seller = sellerList.find(
-      (s) => s.username?.toLowerCase() === cleanInput || s.email?.toLowerCase() === cleanInput
-    );
-
-    if (!seller) {
-      // Auto-provision new seller profile seamlessly if credentials are provided
-      const { hash, salt } = hashPassword(String(password));
-      const sellerId = `seller-${Math.random().toString(36).substring(2, 10)}`;
-      const formattedName = cleanInput === "chihuahua" ? "Luisana y Alex" : cleanInput.charAt(0).toUpperCase() + cleanInput.slice(1);
-      const formattedStore = cleanInput === "chihuahua" ? "Team Chihuahua" : `Tienda ${formattedName}`;
-
-      const createdSeller = {
-        id: sellerId,
-        username: cleanInput,
-        email: `${cleanInput}@tienda.com`,
-        name: formattedName,
-        storeName: formattedStore,
-        passwordHash: hash,
-        salt: salt,
-        createdAt: new Date().toISOString(),
-      };
-
-      if (!db["_sellers"]) db["_sellers"] = {};
-      db["_sellers"][sellerId] = createdSeller;
-
-      if (!db["_sessions"]) db["_sessions"] = {};
-      const token = generateToken();
-      const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-
-      db["_sessions"][token] = {
-        sellerId: sellerId,
-        username: cleanInput,
-        createdAt: new Date().toISOString(),
-        expiresAt: expiresAt,
-      };
-
-      writeDatabase(db);
-
-      console.log(`[Auth] Vendedor auto-inicializado: ${cleanInput}`);
-
-      return res.json({
-        success: true,
-        message: "¡Bienvenido a tu panel de vendedor!",
-        token,
-        seller: {
-          id: createdSeller.id,
-          username: createdSeller.username,
-          email: createdSeller.email,
-          name: createdSeller.name,
-          storeName: createdSeller.storeName,
-          createdAt: createdSeller.createdAt,
-        },
-      });
-    }
-
-    // Verify password
-    const isMatch = verifyPassword(String(password), seller.passwordHash, seller.salt);
-    if (!isMatch) {
-      return res.status(401).json({ error: "Usuario o contraseña incorrectos." });
-    }
-
-    if (!db["_sessions"]) db["_sessions"] = {};
-
-    // Create session token
-    const token = generateToken();
-    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-
-    db["_sessions"][token] = {
-      sellerId: seller.id,
-      username: seller.username,
-      createdAt: new Date().toISOString(),
-      expiresAt: expiresAt,
-    };
-
-    writeDatabase(db);
-
-    const safeSeller = {
-      id: seller.id,
-      username: seller.username,
-      email: seller.email,
-      name: seller.name,
-      storeName: seller.storeName,
-      createdAt: seller.createdAt,
-    };
-
-    console.log(`[Auth] Inicio de sesión exitoso: ${seller.username}`);
-
-    return res.json({
-      success: true,
-      message: "Sesión iniciada correctamente.",
-      token,
-      seller: safeSeller,
-    });
-  } catch (error: any) {
-    console.error("[Auth Login Error]:", error);
-    return res.status(500).json({ error: "Error interno al iniciar sesión.", details: error.message });
-  }
-});
-
-// 3. Obtener datos del Vendedor actual (Me)
-app.get("/api/auth/me", (req, res) => {
-  try {
-    const db = readDatabase();
-    const authData = getSellerFromRequest(req, db);
-
-    if (!authData) {
-      return res.status(401).json({ error: "No autorizado o sesión expirada." });
-    }
-
-    const { seller } = authData;
-    const safeSeller = {
-      id: seller.id,
-      username: seller.username,
-      email: seller.email,
-      name: seller.name,
-      storeName: seller.storeName,
-      createdAt: seller.createdAt,
-    };
-
-    return res.json({
-      success: true,
-      seller: safeSeller,
-    });
-  } catch (error: any) {
-    console.error("[Auth Me Error]:", error);
-    return res.status(500).json({ error: "Error al verificar la sesión." });
-  }
-});
-
-// 4. Cerrar Sesión (Logout)
-app.post("/api/auth/logout", (req, res) => {
-  try {
-    const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.startsWith("Bearer ")) {
-      const token = authHeader.substring(7).trim();
-      const db = readDatabase();
-      if (db["_sessions"] && db["_sessions"][token]) {
-        delete db["_sessions"][token];
-        writeDatabase(db);
-      }
-    }
-    return res.json({ success: true, message: "Sesión cerrada correctamente." });
-  } catch (error: any) {
-    console.error("[Auth Logout Error]:", error);
-    return res.status(500).json({ error: "Error al cerrar sesión." });
   }
 });
 
@@ -1430,6 +788,148 @@ app.get("/api/catalogs/:id", (req, res) => {
   } catch (error: any) {
     console.error("Error al recuperar el catálogo:", error);
     res.status(500).json({ error: "No se pudo recuperar el catálogo." });
+  }
+});
+
+// ============================================================================
+// Seller Authentication & Cloud Storage Routes
+// ============================================================================
+
+// Register a new seller
+app.post("/api/seller/register", (req, res) => {
+  try {
+    const { username, password } = req.body;
+    if (!username || !password) {
+      return res.status(400).json({ error: "El usuario y contraseña son obligatorios." });
+    }
+    
+    const cleanUsername = username.trim().toLowerCase();
+    const sellers = readSellers();
+    
+    if (sellers[cleanUsername]) {
+      return res.status(400).json({ error: "El nombre de usuario ya está registrado." });
+    }
+    
+    const catalogId = "CAT-" + Math.random().toString(36).substring(2, 10).toUpperCase();
+    
+    const defaultCatalog = {
+      id: catalogId,
+      business: {
+        name: username.trim() + " Store",
+        whatsapp: "",
+        paymentMethods: ["Efectivo"],
+        additionalInfo: "Envíos a domicilio disponibles. Consulta formas de pago."
+      },
+      settings: {
+        primaryColor: "#000000",
+        secondaryColor: "#ffffff",
+        theme: "dark", // Modo oscuro por defecto
+        currency: "EUR",
+        layout: "grid",
+        showSku: true,
+        showAttributes: true
+      },
+      products: []
+    };
+    
+    sellers[cleanUsername] = {
+      username: cleanUsername,
+      password: password,
+      catalogId: catalogId,
+      catalog: defaultCatalog
+    };
+    
+    writeSellers(sellers);
+    
+    res.json({ success: true, username: cleanUsername, catalog: defaultCatalog });
+  } catch (error: any) {
+    console.error("Error al registrar vendedor:", error);
+    res.status(500).json({ error: "Error en el servidor al registrar el usuario." });
+  }
+});
+
+// Login a seller
+app.post("/api/seller/login", (req, res) => {
+  try {
+    const { username, password } = req.body;
+    if (!username || !password) {
+      return res.status(400).json({ error: "El usuario y contraseña son obligatorios." });
+    }
+    
+    const cleanUsername = username.trim().toLowerCase();
+    const sellers = readSellers();
+    const seller = sellers[cleanUsername];
+    
+    if (!seller || seller.password !== password) {
+      return res.status(401).json({ error: "Usuario o contraseña incorrectos." });
+    }
+    
+    res.json({ success: true, username: cleanUsername, catalog: seller.catalog });
+  } catch (error: any) {
+    console.error("Error al iniciar sesión de vendedor:", error);
+    res.status(500).json({ error: "Error en el servidor al iniciar sesión." });
+  }
+});
+
+// Load seller catalog
+app.get("/api/seller/catalog", (req, res) => {
+  try {
+    const { username } = req.query;
+    if (!username) {
+      return res.status(400).json({ error: "Falta el nombre de usuario." });
+    }
+    
+    const cleanUsername = (username as string).trim().toLowerCase();
+    const sellers = readSellers();
+    const seller = sellers[cleanUsername];
+    
+    if (!seller) {
+      return res.status(404).json({ error: "Vendedor no encontrado." });
+    }
+    
+    res.json(seller.catalog);
+  } catch (error: any) {
+    console.error("Error al cargar catálogo del vendedor:", error);
+    res.status(500).json({ error: "Error al recuperar la configuración." });
+  }
+});
+
+// Save/Update seller catalog in real-time
+app.post("/api/seller/save-catalog", (req, res) => {
+  try {
+    const { username, catalog } = req.body;
+    if (!username || !catalog) {
+      return res.status(400).json({ error: "Faltan datos para guardar el catálogo." });
+    }
+    
+    const cleanUsername = username.trim().toLowerCase();
+    const sellers = readSellers();
+    
+    if (!sellers[cleanUsername]) {
+      return res.status(404).json({ error: "Vendedor no registrado." });
+    }
+    
+    // Update the seller's private copy of catalog
+    sellers[cleanUsername].catalog = catalog;
+    writeSellers(sellers);
+    
+    // Also mirror this catalog in the global catalogs database so clients can view it live
+    const catalogId = catalog.id || sellers[cleanUsername].catalogId;
+    const db = readDatabase();
+    
+    db[catalogId] = {
+      id: catalogId,
+      business: catalog.business,
+      settings: catalog.settings,
+      products: catalog.products,
+      createdAt: new Date().toISOString()
+    };
+    writeDatabase(db);
+    
+    res.json({ success: true, catalogId });
+  } catch (error: any) {
+    console.error("Error al guardar catálogo del vendedor:", error);
+    res.status(500).json({ error: "Error de servidor al guardar catálogo." });
   }
 });
 
