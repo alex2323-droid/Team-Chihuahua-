@@ -1,6 +1,7 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
+import crypto from "crypto";
 import { fileURLToPath } from "url";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
@@ -42,6 +43,81 @@ function writeDatabase(data: any) {
     console.error("Error writing to database:", error);
   }
 }
+
+// ----------------------------------------------------------------------------
+// Seller Authentication & Password Hashing Utilities
+// ----------------------------------------------------------------------------
+
+function hashPassword(password: string, salt?: string): { hash: string; salt: string } {
+  const s = salt || crypto.randomBytes(16).toString("hex");
+  const hash = crypto.pbkdf2Sync(password, s, 1000, 64, "sha512").toString("hex");
+  return { hash, salt: s };
+}
+
+function verifyPassword(password: string, hash: string, salt: string): boolean {
+  try {
+    const check = crypto.pbkdf2Sync(password, salt, 1000, 64, "sha512").toString("hex");
+    return check === hash;
+  } catch {
+    return false;
+  }
+}
+
+function generateToken(): string {
+  return crypto.randomBytes(32).toString("hex");
+}
+
+function getSellerFromRequest(req: express.Request, db: any) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return null;
+  }
+  const token = authHeader.substring(7).trim();
+  const sessions = db["_sessions"] || {};
+  const session = sessions[token];
+  if (!session) return null;
+
+  if (session.expiresAt && new Date(session.expiresAt) < new Date()) {
+    return null;
+  }
+
+  const sellers = db["_sellers"] || {};
+  const seller = sellers[session.sellerId];
+  if (!seller) return null;
+
+  return { seller, token };
+}
+
+// Initialize default demo seller account if no sellers exist
+function initializeDefaultSellerIfNeeded() {
+  try {
+    const db = readDatabase();
+    if (!db["_sellers"]) {
+      db["_sellers"] = {};
+    }
+    const sellers = Object.values(db["_sellers"]) as any[];
+    if (sellers.length === 0) {
+      const { hash, salt } = hashPassword("123456");
+      const defaultSellerId = "seller-admin-01";
+      db["_sellers"][defaultSellerId] = {
+        id: defaultSellerId,
+        username: "vendedor",
+        email: "vendedor@catalogo.com",
+        name: "Vendedor Principal",
+        storeName: "Boutique Bella Vista",
+        passwordHash: hash,
+        salt: salt,
+        createdAt: new Date().toISOString()
+      };
+      writeDatabase(db);
+      console.log("[Auth] Creada cuenta inicial de vendedor demo: usuario='vendedor', clave='123456'");
+    }
+  } catch (err) {
+    console.error("[Auth] Error al inicializar cuenta de vendedor:", err);
+  }
+}
+
+initializeDefaultSellerIfNeeded();
 
 // Initialize Gemini client on the server
 // Always lazy load / verify key is present when endpoint is called to avoid startup crash
@@ -791,6 +867,210 @@ app.post("/api/store-profile", (req, res) => {
   } catch (error: any) {
     console.error("Error al guardar perfil de la tienda:", error);
     res.status(500).json({ error: "No se pudo guardar la configuración en el servidor.", details: error.message });
+  }
+});
+
+// ============================================================================
+// SELLER AUTHENTICATION ROUTES (Registro y Login para Vendedores)
+// ============================================================================
+
+// 1. Registro de nuevo Vendedor
+app.post("/api/auth/register", (req, res) => {
+  try {
+    const { username, password, name, storeName, email } = req.body;
+
+    if (!username || typeof username !== "string" || username.trim().length < 3) {
+      return res.status(400).json({ error: "El nombre de usuario debe tener al menos 3 caracteres." });
+    }
+
+    if (!password || typeof password !== "string" || password.length < 4) {
+      return res.status(400).json({ error: "La contraseña debe tener al menos 4 caracteres." });
+    }
+
+    const cleanUsername = username.trim().toLowerCase();
+    const cleanEmail = email && typeof email === "string" ? email.trim().toLowerCase() : `${cleanUsername}@tienda.com`;
+    const cleanName = name && typeof name === "string" ? name.trim() : cleanUsername;
+    const cleanStoreName = storeName && typeof storeName === "string" ? storeName.trim() : `Tienda ${cleanName}`;
+
+    const db = readDatabase();
+    if (!db["_sellers"]) db["_sellers"] = {};
+    if (!db["_sessions"]) db["_sessions"] = {};
+
+    // Check if username or email already registered
+    const existingSellers = Object.values(db["_sellers"]) as any[];
+    const usernameTaken = existingSellers.some(
+      (s) => s.username?.toLowerCase() === cleanUsername || (cleanEmail && s.email?.toLowerCase() === cleanEmail)
+    );
+
+    if (usernameTaken) {
+      return res.status(409).json({ error: "El nombre de usuario o correo ya se encuentra registrado." });
+    }
+
+    const { hash, salt } = hashPassword(password);
+    const sellerId = `seller-${Math.random().toString(36).substring(2, 10)}`;
+
+    const newSeller = {
+      id: sellerId,
+      username: cleanUsername,
+      email: cleanEmail,
+      name: cleanName,
+      storeName: cleanStoreName,
+      passwordHash: hash,
+      salt: salt,
+      createdAt: new Date().toISOString(),
+    };
+
+    db["_sellers"][sellerId] = newSeller;
+
+    // Create session token (valid for 30 days)
+    const token = generateToken();
+    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+
+    db["_sessions"][token] = {
+      sellerId: sellerId,
+      username: cleanUsername,
+      createdAt: new Date().toISOString(),
+      expiresAt: expiresAt,
+    };
+
+    writeDatabase(db);
+
+    const safeSeller = {
+      id: newSeller.id,
+      username: newSeller.username,
+      email: newSeller.email,
+      name: newSeller.name,
+      storeName: newSeller.storeName,
+      createdAt: newSeller.createdAt,
+    };
+
+    console.log(`[Auth] Nuevo vendedor registrado exitosamente: ${cleanUsername} (${cleanStoreName})`);
+
+    return res.status(201).json({
+      success: true,
+      message: "Registro exitoso. ¡Bienvenido a tu panel de vendedor!",
+      token,
+      seller: safeSeller,
+    });
+  } catch (error: any) {
+    console.error("[Auth Register Error]:", error);
+    return res.status(500).json({ error: "Error interno al procesar el registro de vendedor.", details: error.message });
+  }
+});
+
+// 2. Inicio de Sesión de Vendedor (Login)
+app.post("/api/auth/login", (req, res) => {
+  try {
+    const { username, password } = req.body;
+
+    if (!username || !password) {
+      return res.status(400).json({ error: "Por favor proporciona usuario y contraseña." });
+    }
+
+    const cleanInput = String(username).trim().toLowerCase();
+    const db = readDatabase();
+    const sellers = db["_sellers"] || {};
+    const sellerList = Object.values(sellers) as any[];
+
+    // Find seller by username or email
+    const seller = sellerList.find(
+      (s) => s.username?.toLowerCase() === cleanInput || s.email?.toLowerCase() === cleanInput
+    );
+
+    if (!seller) {
+      return res.status(401).json({ error: "Usuario o contraseña incorrectos." });
+    }
+
+    // Verify password
+    const isMatch = verifyPassword(String(password), seller.passwordHash, seller.salt);
+    if (!isMatch) {
+      return res.status(401).json({ error: "Usuario o contraseña incorrectos." });
+    }
+
+    if (!db["_sessions"]) db["_sessions"] = {};
+
+    // Create session token
+    const token = generateToken();
+    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+
+    db["_sessions"][token] = {
+      sellerId: seller.id,
+      username: seller.username,
+      createdAt: new Date().toISOString(),
+      expiresAt: expiresAt,
+    };
+
+    writeDatabase(db);
+
+    const safeSeller = {
+      id: seller.id,
+      username: seller.username,
+      email: seller.email,
+      name: seller.name,
+      storeName: seller.storeName,
+      createdAt: seller.createdAt,
+    };
+
+    console.log(`[Auth] Inicio de sesión exitoso: ${seller.username}`);
+
+    return res.json({
+      success: true,
+      message: "Sesión iniciada correctamente.",
+      token,
+      seller: safeSeller,
+    });
+  } catch (error: any) {
+    console.error("[Auth Login Error]:", error);
+    return res.status(500).json({ error: "Error interno al iniciar sesión.", details: error.message });
+  }
+});
+
+// 3. Obtener datos del Vendedor actual (Me)
+app.get("/api/auth/me", (req, res) => {
+  try {
+    const db = readDatabase();
+    const authData = getSellerFromRequest(req, db);
+
+    if (!authData) {
+      return res.status(401).json({ error: "No autorizado o sesión expirada." });
+    }
+
+    const { seller } = authData;
+    const safeSeller = {
+      id: seller.id,
+      username: seller.username,
+      email: seller.email,
+      name: seller.name,
+      storeName: seller.storeName,
+      createdAt: seller.createdAt,
+    };
+
+    return res.json({
+      success: true,
+      seller: safeSeller,
+    });
+  } catch (error: any) {
+    console.error("[Auth Me Error]:", error);
+    return res.status(500).json({ error: "Error al verificar la sesión." });
+  }
+});
+
+// 4. Cerrar Sesión (Logout)
+app.post("/api/auth/logout", (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith("Bearer ")) {
+      const token = authHeader.substring(7).trim();
+      const db = readDatabase();
+      if (db["_sessions"] && db["_sessions"][token]) {
+        delete db["_sessions"][token];
+        writeDatabase(db);
+      }
+    }
+    return res.json({ success: true, message: "Sesión cerrada correctamente." });
+  } catch (error: any) {
+    console.error("[Auth Logout Error]:", error);
+    return res.status(500).json({ error: "Error al cerrar sesión." });
   }
 });
 

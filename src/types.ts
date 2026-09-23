@@ -10,6 +10,23 @@ export interface BusinessInfo {
   additionalInfo?: string;
 }
 
+export interface Seller {
+  id: string;
+  username: string;
+  email: string;
+  name: string;
+  storeName?: string;
+  createdAt?: string;
+}
+
+export interface AuthResponse {
+  success: boolean;
+  token?: string;
+  seller?: Seller;
+  error?: string;
+  message?: string;
+}
+
 export interface ProductAttributes {
   colors?: string[];
   sizes?: string[];
@@ -36,6 +53,7 @@ export interface CatalogSettings {
   primaryColor: string; // hex
   secondaryColor: string; // hex
   theme: 'light' | 'dark' | 'minimalist' | 'premium' | 'retro';
+  darkMode?: boolean;
   currency: string; // e.g. "USD", "COP", "MXN", "EUR"
   layout: 'grid' | 'list';
   showSku: boolean;

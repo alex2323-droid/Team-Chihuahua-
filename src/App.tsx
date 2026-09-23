@@ -5,6 +5,8 @@ import ProductUploader from './components/ProductUploader';
 import ProductList from './components/ProductList';
 import CatalogPreview from './components/CatalogPreview';
 import PdfExportModal from './components/PdfExportModal';
+import SellerPortal from './components/SellerPortal';
+import { useAuth } from './context/AuthContext';
 import { loadInitialStoreProfile, saveStoreProfile } from './utils/storeProfile';
 import {
   Sparkles,
@@ -24,6 +26,14 @@ import {
   X,
   FileDown,
   Printer,
+  Moon,
+  Sun,
+  Store,
+  Upload,
+  Package,
+  LogOut,
+  User,
+  ShieldCheck,
 } from 'lucide-react';
 
 const DEFAULT_BUSINESS: BusinessInfo = {
@@ -36,9 +46,10 @@ const DEFAULT_BUSINESS: BusinessInfo = {
 };
 
 const DEFAULT_SETTINGS: CatalogSettings = {
-  primaryColor: '#111827', // Elegant Blue / Charcoal
+  primaryColor: '#111827', // Charcoal Black
   secondaryColor: '#3B82F6',
   theme: 'light',
+  darkMode: false,
   currency: 'EUR',
   layout: 'grid',
   showSku: true,
@@ -98,13 +109,18 @@ const PRESET_PRODUCTS: Product[] = [
   },
 ];
 
+type MobileTab = 'store' | 'upload' | 'products' | 'preview';
+
 export default function App() {
+  const { seller, isLoading: isAuthLoading, logout } = useAuth();
+
   const [business, setBusiness] = useState<BusinessInfo>(DEFAULT_BUSINESS);
   const [settings, setSettings] = useState<CatalogSettings>(DEFAULT_SETTINGS);
   const [products, setProducts] = useState<Product[]>(PRESET_PRODUCTS);
 
   // App mode states
   const [activeTab, setActiveTab] = useState<'editor' | 'preview'>('editor');
+  const [mobileTab, setMobileTab] = useState<MobileTab>('products');
   const [isLoadingCatalog, setIsLoadingCatalog] = useState(false);
   const [isCustomerView, setIsCustomerView] = useState(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
@@ -115,6 +131,41 @@ export default function App() {
   const [savedCatalogId, setSavedCatalogId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [isPdfModalOpen, setIsPdfModalOpen] = useState(false);
+
+  // Sync store name with seller when seller logs in if not customized
+  useEffect(() => {
+    if (seller && seller.storeName && (business.name === DEFAULT_BUSINESS.name || !business.name)) {
+      setBusiness((prev) => ({
+        ...prev,
+        name: seller.storeName || prev.name,
+      }));
+    }
+  }, [seller]);
+
+  // Global Tailwind dark mode sync on document root
+  const isDarkMode = Boolean(
+    settings.darkMode ||
+    settings.theme === 'dark' ||
+    settings.theme === 'premium'
+  );
+
+  useEffect(() => {
+    if (isDarkMode) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [isDarkMode]);
+
+  // Toggle Dark Theme Helper
+  const toggleDarkMode = () => {
+    const nextDarkState = !isDarkMode;
+    setSettings((prev) => ({
+      ...prev,
+      darkMode: nextDarkState,
+      theme: nextDarkState ? 'dark' : 'light',
+    }));
+  };
 
   // Listen for query parameter on load or load persisted store configuration
   useEffect(() => {
@@ -129,7 +180,15 @@ export default function App() {
           setBusiness((prev) => ({ ...prev, ...profile.business }));
         }
         if (profile.settings) {
-          setSettings((prev) => ({ ...prev, ...profile.settings }));
+          setSettings((prev) => {
+            const merged = { ...prev, ...profile.settings };
+            if (profile.settings?.darkMode !== undefined) {
+              merged.darkMode = profile.settings.darkMode;
+            } else if (profile.settings?.theme === 'dark' || profile.settings?.theme === 'premium') {
+              merged.darkMode = true;
+            }
+            return merged;
+          });
         }
       });
 
@@ -182,7 +241,6 @@ export default function App() {
 
   const handleProductsUploaded = (newProducts: Product[]) => {
     setProducts((prev) => {
-      // Filter out temporary placeholders that were successfully parsed
       const current = [...prev];
       newProducts.forEach((item) => {
         const index = current.findIndex((p) => p.id === item.id);
@@ -194,11 +252,14 @@ export default function App() {
       });
       return current;
     });
+    // On mobile, automatically bring user to products tab after upload
+    setMobileTab('products');
   };
 
   const handleSaveAndPublish = async () => {
     if (!business.name || !business.whatsapp) {
       alert('Por favor, completa el nombre del negocio y el número de WhatsApp para poder continuar.');
+      setMobileTab('store');
       return;
     }
 
@@ -221,7 +282,6 @@ export default function App() {
 
       const data = await response.json();
       setSavedCatalogId(data.id);
-      // Persist store profile globally as well
       saveStoreProfile(business, settings).catch(() => {});
       setIsShareModalOpen(true);
     } catch (error: any) {
@@ -251,14 +311,14 @@ export default function App() {
     }
   };
 
-  // RENDER CUSTOMER STANDALONE VIEW
+  // RENDER CUSTOMER STANDALONE VIEW (Customers view catalogs directly without needing to log in)
   if (isCustomerView) {
     if (isLoadingCatalog) {
       return (
-        <div className="min-h-screen flex items-center justify-center bg-neutral-50">
+        <div className="min-h-screen flex items-center justify-center bg-neutral-50 dark:bg-black text-neutral-900 dark:text-white">
           <div className="text-center space-y-3">
-            <div className="w-10 h-10 border-4 border-neutral-900 border-t-transparent rounded-full animate-spin mx-auto" />
-            <p className="text-xs text-neutral-500 font-semibold">Cargando catálogo...</p>
+            <div className="w-10 h-10 border-4 border-neutral-900 dark:border-white border-t-transparent dark:border-t-transparent rounded-full animate-spin mx-auto" />
+            <p className="text-xs text-neutral-500 dark:text-neutral-400 font-semibold">Cargando catálogo...</p>
           </div>
         </div>
       );
@@ -266,16 +326,16 @@ export default function App() {
 
     if (catalogError) {
       return (
-        <div className="min-h-screen flex items-center justify-center bg-neutral-50 px-4 text-center">
-          <div className="max-w-md bg-white p-8 rounded-2xl shadow-sm border border-neutral-100 space-y-4">
-            <div className="w-12 h-12 bg-red-50 text-red-500 flex items-center justify-center rounded-full mx-auto font-bold text-xl">
+        <div className="min-h-screen flex items-center justify-center bg-neutral-50 dark:bg-black px-4 text-center">
+          <div className="max-w-md bg-white dark:bg-neutral-900 p-8 rounded-2xl shadow-sm border border-neutral-100 dark:border-neutral-800 space-y-4">
+            <div className="w-12 h-12 bg-red-50 dark:bg-red-950/40 text-red-500 flex items-center justify-center rounded-full mx-auto font-bold text-xl">
               !
             </div>
-            <h2 className="text-lg font-bold text-neutral-800">Catálogo No Disponible</h2>
-            <p className="text-xs text-neutral-500 leading-relaxed">{catalogError}</p>
+            <h2 className="text-lg font-bold text-neutral-800 dark:text-white">Catálogo No Disponible</h2>
+            <p className="text-xs text-neutral-500 dark:text-neutral-400 leading-relaxed">{catalogError}</p>
             <a
               href={window.location.origin + window.location.pathname}
-              className="inline-block bg-neutral-900 text-white text-xs font-semibold px-4 py-2 rounded-lg hover:bg-neutral-800 transition"
+              className="inline-block bg-neutral-900 hover:bg-neutral-800 dark:bg-white dark:hover:bg-neutral-100 text-white dark:text-black text-xs font-semibold px-4 py-2 rounded-lg transition"
             >
               Crear Nuevo Catálogo
             </a>
@@ -294,28 +354,51 @@ export default function App() {
     );
   }
 
-  // RENDER CREATOR DASHBOARD
+  // AUTHENTICATION CHECK FOR SELLERS ONLY
+  if (isAuthLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-neutral-50 dark:bg-black text-neutral-900 dark:text-white">
+        <div className="text-center space-y-3">
+          <div className="w-10 h-10 border-4 border-neutral-900 dark:border-white border-t-transparent dark:border-t-transparent rounded-full animate-spin mx-auto" />
+          <p className="text-xs text-neutral-500 dark:text-neutral-400 font-semibold">Verificando sesión de vendedor...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!seller) {
+    return <SellerPortal />;
+  }
+
+  // RENDER CREATOR DASHBOARD FOR AUTHENTICATED SELLERS
   return (
-    <div className="min-h-screen bg-neutral-50 flex flex-col font-sans" id="creator-dashboard-root">
-      {/* Top Navbar */}
-      <header className="bg-white border-b border-neutral-200 sticky top-0 z-40 px-4 py-3 shadow-sm">
-        <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
-          <div className="flex items-center gap-2.5">
-            <div className="bg-neutral-900 p-2 rounded-xl text-white">
-              <ShoppingBag className="w-5 h-5" />
+    <div className="min-h-screen bg-neutral-50 dark:bg-black text-neutral-900 dark:text-white flex flex-col font-sans transition-colors duration-200 pb-20 lg:pb-0" id="creator-dashboard-root">
+      {/* Top Navbar Optimized for Smartphone & Desktop */}
+      <header className="bg-white/95 dark:bg-[#0a0a0a]/95 backdrop-blur-md border-b border-neutral-200 dark:border-neutral-800 sticky top-0 z-40 px-3 sm:px-4 py-2.5 sm:py-3 shadow-2xs pt-safe">
+        <div className="max-w-7xl mx-auto flex items-center justify-between gap-2 sm:gap-4">
+          {/* Logo & Title */}
+          <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
+            <div className="bg-neutral-900 dark:bg-white p-2 rounded-xl text-white dark:text-black shadow-sm shrink-0">
+              <ShoppingBag className="w-4 h-4 sm:w-5 sm:h-5" />
             </div>
-            <div>
-              <h1 className="text-sm font-bold text-neutral-900 tracking-tight">Catálogo Inteligente</h1>
-              <p className="text-[10px] text-neutral-500 font-medium">Generador Profesional de Catálogos</p>
+            <div className="min-w-0">
+              <h1 className="text-xs sm:text-sm font-bold text-neutral-900 dark:text-white tracking-tight truncate">
+                {business.name || seller.storeName || 'Catálogo Inteligente'}
+              </h1>
+              <p className="text-[9px] sm:text-[10px] text-neutral-500 dark:text-neutral-400 font-medium hidden xs:block truncate">
+                Panel de Vendedor • @{seller.username}
+              </p>
             </div>
           </div>
 
-          {/* Navigation Tabs (Mobile optimized layout toggle) */}
-          <div className="flex bg-neutral-100 p-1 rounded-xl">
+          {/* Desktop Navigation Tabs (Hidden on mobile, mobile uses bottom bar) */}
+          <div className="hidden lg:flex bg-neutral-100 dark:bg-neutral-900 p-1 rounded-xl border border-neutral-200/50 dark:border-neutral-800">
             <button
               onClick={() => setActiveTab('editor')}
               className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
-                activeTab === 'editor' ? 'bg-white text-neutral-900 shadow-sm' : 'text-neutral-500 hover:text-neutral-700'
+                activeTab === 'editor'
+                  ? 'bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white shadow-xs'
+                  : 'text-neutral-500 dark:text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200'
               }`}
             >
               <Settings className="w-3.5 h-3.5" />
@@ -324,7 +407,9 @@ export default function App() {
             <button
               onClick={() => setActiveTab('preview')}
               className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
-                activeTab === 'preview' ? 'bg-white text-neutral-900 shadow-sm' : 'text-neutral-500 hover:text-neutral-700'
+                activeTab === 'preview'
+                  ? 'bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white shadow-xs'
+                  : 'text-neutral-500 dark:text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200'
               }`}
             >
               <Eye className="w-3.5 h-3.5" />
@@ -332,45 +417,86 @@ export default function App() {
             </button>
           </div>
 
-          {/* Acciones */}
-          <div className="flex items-center gap-2">
+          {/* Action Buttons & Seller Profile in Header */}
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            {/* Seller Account Badge */}
+            <div className="hidden md:flex items-center gap-2 px-2.5 py-1.5 bg-neutral-100 dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl text-xs">
+              <div className="w-5 h-5 rounded-full bg-neutral-900 dark:bg-white text-white dark:text-black flex items-center justify-center font-bold text-[10px] shrink-0">
+                {seller.name.charAt(0).toUpperCase()}
+              </div>
+              <div className="text-left leading-tight">
+                <span className="font-bold text-neutral-900 dark:text-white block text-[11px] truncate max-w-[120px]">
+                  {seller.name}
+                </span>
+                <span className="text-[9px] text-neutral-400 dark:text-neutral-500 block truncate max-w-[120px]">
+                  {seller.storeName || `@${seller.username}`}
+                </span>
+              </div>
+            </div>
+
+            {/* Dark Mode Quick Switcher */}
             <button
-              onClick={() => setIsPdfModalOpen(true)}
-              className="bg-white hover:bg-neutral-50 text-neutral-800 border border-neutral-200 text-xs font-semibold px-3.5 py-2 rounded-lg transition inline-flex items-center gap-1.5 shadow-2xs"
-              title="Exportar catálogo en PDF listo para imprimir o compartir"
+              type="button"
+              onClick={toggleDarkMode}
+              className={`p-2 rounded-xl border transition flex items-center justify-center min-w-[36px] min-h-[36px] ${
+                isDarkMode
+                  ? 'bg-neutral-900 hover:bg-neutral-800 text-yellow-400 border-neutral-800'
+                  : 'bg-white hover:bg-neutral-50 text-neutral-700 border-neutral-200'
+              }`}
+              title={isDarkMode ? 'Modo Claro' : 'Modo Oscuro (Negro y Blanco)'}
+              aria-label="Toggle Dark Mode"
             >
-              <FileDown className="w-3.5 h-3.5 text-blue-600" />
-              <span>Exportar PDF</span>
+              {isDarkMode ? <Sun className="w-4 h-4 text-amber-300" /> : <Moon className="w-4 h-4 text-neutral-600" />}
             </button>
 
+            {/* PDF Export Button */}
+            <button
+              onClick={() => setIsPdfModalOpen(true)}
+              className="bg-white hover:bg-neutral-50 dark:bg-neutral-900 dark:hover:bg-neutral-800 text-neutral-800 dark:text-neutral-200 border border-neutral-200 dark:border-neutral-800 text-xs font-semibold px-2.5 sm:px-3.5 py-2 rounded-xl transition inline-flex items-center gap-1.5 shadow-2xs min-h-[36px]"
+              title="Exportar catálogo en PDF"
+            >
+              <FileDown className="w-4 h-4 text-blue-500 shrink-0" />
+              <span className="hidden sm:inline">PDF</span>
+            </button>
+
+            {/* Save and Publish Button */}
             <button
               onClick={handleSaveAndPublish}
               disabled={isSaving}
-              className="bg-neutral-900 hover:bg-neutral-800 text-white text-xs font-semibold px-4 py-2 rounded-lg transition inline-flex items-center gap-1.5 shadow"
+              className="bg-neutral-900 hover:bg-neutral-800 dark:bg-white dark:hover:bg-neutral-100 text-white dark:text-black text-xs font-bold px-3 sm:px-4 py-2 rounded-xl transition inline-flex items-center gap-1.5 shadow min-h-[36px] active:scale-95 disabled:opacity-50"
             >
               {isSaving ? (
                 <>
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  Guardando...
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin shrink-0" />
+                  <span className="hidden sm:inline">Guardando...</span>
                 </>
               ) : (
                 <>
-                  <Share2 className="w-3.5 h-3.5" />
-                  Guardar y Compartir
+                  <Share2 className="w-3.5 h-3.5 shrink-0" />
+                  <span className="hidden xs:inline">Compartir</span>
                 </>
               )}
+            </button>
+
+            {/* Logout Button */}
+            <button
+              type="button"
+              onClick={() => logout()}
+              className="bg-white hover:bg-red-50 dark:bg-neutral-900 dark:hover:bg-red-950/30 text-neutral-600 hover:text-red-600 dark:text-neutral-400 dark:hover:text-red-400 border border-neutral-200 dark:border-neutral-800 p-2 rounded-xl transition shadow-2xs min-w-[36px] min-h-[36px] flex items-center justify-center"
+              title={`Cerrar sesión de ${seller.name} (@${seller.username})`}
+              aria-label="Cerrar sesión"
+            >
+              <LogOut className="w-4 h-4" />
             </button>
           </div>
         </div>
       </header>
 
       {/* Main Workspace Layout */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          
-          {/* EDITOR COLUMN */}
+      <main className="flex-1 max-w-7xl w-full mx-auto p-3 sm:p-4 md:p-6">
+        {/* DESKTOP LAYOUT (>= 1024px) */}
+        <div className="hidden lg:grid lg:grid-cols-12 gap-6 items-start">
           <div className={`lg:col-span-7 space-y-6 ${activeTab === 'editor' ? 'block' : 'hidden lg:block'}`}>
-            {/* 1. Datos Negocio y Marca */}
             <BusinessSettings
               business={business}
               setBusiness={setBusiness}
@@ -378,13 +504,11 @@ export default function App() {
               setSettings={setSettings}
             />
 
-            {/* 2. Drag & Drop File Loader */}
             <ProductUploader
               onProductsUploaded={handleProductsUploaded}
               currency={settings.currency}
             />
 
-            {/* 3. List of Products */}
             <ProductList
               products={products}
               setProducts={setProducts}
@@ -392,7 +516,6 @@ export default function App() {
             />
           </div>
 
-          {/* DYNAMIC LIVE STOREFRONT PREVIEW */}
           <div className={`lg:col-span-5 ${activeTab === 'preview' ? 'block' : 'hidden lg:block lg:sticky lg:top-20'}`}>
             <CatalogPreview
               business={business}
@@ -401,49 +524,175 @@ export default function App() {
               isCustomerView={false}
             />
           </div>
+        </div>
 
+        {/* SMARTPHONE / MOBILE SCREEN CONTENT (< 1024px) */}
+        <div className="block lg:hidden space-y-4">
+          {mobileTab === 'store' && (
+            <div className="animate-in fade-in duration-150">
+              <BusinessSettings
+                business={business}
+                setBusiness={setBusiness}
+                settings={settings}
+                setSettings={setSettings}
+              />
+            </div>
+          )}
+
+          {mobileTab === 'upload' && (
+            <div className="animate-in fade-in duration-150">
+              <ProductUploader
+                onProductsUploaded={handleProductsUploaded}
+                currency={settings.currency}
+              />
+            </div>
+          )}
+
+          {mobileTab === 'products' && (
+            <div className="animate-in fade-in duration-150 space-y-4">
+              <ProductList
+                products={products}
+                setProducts={setProducts}
+                currency={settings.currency}
+              />
+            </div>
+          )}
+
+          {mobileTab === 'preview' && (
+            <div className="animate-in fade-in duration-150">
+              <CatalogPreview
+                business={business}
+                settings={settings}
+                products={products}
+                isCustomerView={false}
+              />
+            </div>
+          )}
         </div>
       </main>
 
-      {/* FOOTER */}
-      <footer className="bg-white border-t border-neutral-100 py-4 mt-12 text-center text-[11px] text-neutral-400 font-medium">
-        Generador de Catálogos de Productos &copy; {new Date().getFullYear()} • Desarrollado con Inteligencia Artificial.
+      {/* FOOTER DESKTOP */}
+      <footer className="hidden lg:block bg-white dark:bg-[#0a0a0a] border-t border-neutral-100 dark:border-neutral-900 py-4 mt-12 text-center text-[11px] text-neutral-400 dark:text-neutral-500 font-medium">
+        Generador de Catálogos de Productos &copy; {new Date().getFullYear()} • Modo Smartphone, Dark Negro y Blanco & IA.
       </footer>
+
+      {/* SMARTPHONE FIXED BOTTOM NAVIGATION BAR */}
+      <nav
+        id="mobile-bottom-nav"
+        className="fixed bottom-0 inset-x-0 z-40 bg-white/95 dark:bg-[#0a0a0a]/95 backdrop-blur-lg border-t border-neutral-200 dark:border-neutral-800 pb-safe lg:hidden shadow-lg transition-colors"
+      >
+        <div className="grid grid-cols-4 items-center h-14">
+          {/* Tab 1: Tienda */}
+          <button
+            type="button"
+            onClick={() => setMobileTab('store')}
+            className={`flex flex-col items-center justify-center h-full transition relative ${
+              mobileTab === 'store'
+                ? 'text-neutral-950 dark:text-white font-bold'
+                : 'text-neutral-400 dark:text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300'
+            }`}
+          >
+            {mobileTab === 'store' && (
+              <span className="absolute top-0 inset-x-4 h-0.5 bg-neutral-950 dark:bg-white rounded-full" />
+            )}
+            <Store className="w-4 h-4" />
+            <span className="text-[10px] mt-1 tracking-tight">Tienda</span>
+          </button>
+
+          {/* Tab 2: Cargar */}
+          <button
+            type="button"
+            onClick={() => setMobileTab('upload')}
+            className={`flex flex-col items-center justify-center h-full transition relative ${
+              mobileTab === 'upload'
+                ? 'text-neutral-950 dark:text-white font-bold'
+                : 'text-neutral-400 dark:text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300'
+            }`}
+          >
+            {mobileTab === 'upload' && (
+              <span className="absolute top-0 inset-x-4 h-0.5 bg-neutral-950 dark:bg-white rounded-full" />
+            )}
+            <Upload className="w-4 h-4" />
+            <span className="text-[10px] mt-1 tracking-tight">Cargar</span>
+          </button>
+
+          {/* Tab 3: Productos */}
+          <button
+            type="button"
+            onClick={() => setMobileTab('products')}
+            className={`flex flex-col items-center justify-center h-full transition relative ${
+              mobileTab === 'products'
+                ? 'text-neutral-950 dark:text-white font-bold'
+                : 'text-neutral-400 dark:text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300'
+            }`}
+          >
+            {mobileTab === 'products' && (
+              <span className="absolute top-0 inset-x-4 h-0.5 bg-neutral-950 dark:bg-white rounded-full" />
+            )}
+            <div className="relative">
+              <Package className="w-4 h-4" />
+              {products.length > 0 && (
+                <span className="absolute -top-1.5 -right-2.5 bg-neutral-900 dark:bg-white text-white dark:text-black text-[9px] font-bold px-1 rounded-full min-w-[14px] text-center shadow-xs">
+                  {products.length}
+                </span>
+              )}
+            </div>
+            <span className="text-[10px] mt-1 tracking-tight">Productos</span>
+          </button>
+
+          {/* Tab 4: Vista Previa */}
+          <button
+            type="button"
+            onClick={() => setMobileTab('preview')}
+            className={`flex flex-col items-center justify-center h-full transition relative ${
+              mobileTab === 'preview'
+                ? 'text-neutral-950 dark:text-white font-bold'
+                : 'text-neutral-400 dark:text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300'
+            }`}
+          >
+            {mobileTab === 'preview' && (
+              <span className="absolute top-0 inset-x-4 h-0.5 bg-neutral-950 dark:bg-white rounded-full" />
+            )}
+            <Eye className="w-4 h-4" />
+            <span className="text-[10px] mt-1 tracking-tight">Ver Tienda</span>
+          </button>
+        </div>
+      </nav>
 
       {/* SHARE MODAL */}
       {isShareModalOpen && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-neutral-100 relative space-y-4">
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-150">
+          <div className="bg-white dark:bg-[#0e0e10] text-neutral-900 dark:text-white rounded-t-3xl sm:rounded-2xl max-w-md w-full p-5 sm:p-6 shadow-2xl border border-neutral-100 dark:border-neutral-800 relative space-y-4 pb-safe sm:pb-6">
             <button
               onClick={() => setIsShareModalOpen(false)}
-              className="absolute top-4 right-4 text-neutral-400 hover:text-neutral-600 p-1 rounded-lg hover:bg-neutral-50 transition"
+              className="absolute top-4 right-4 text-neutral-400 hover:text-neutral-600 dark:hover:text-white p-2 rounded-xl hover:bg-neutral-50 dark:hover:bg-neutral-800 transition"
             >
               <X className="w-5 h-5" />
             </button>
 
-            <div className="text-center space-y-2">
-              <div className="w-12 h-12 bg-green-50 text-green-600 rounded-full flex items-center justify-center mx-auto">
+            <div className="text-center space-y-2 pt-2 sm:pt-0">
+              <div className="w-12 h-12 bg-green-50 dark:bg-green-950/40 text-green-600 dark:text-green-400 rounded-full flex items-center justify-center mx-auto">
                 <Check className="w-6 h-6" />
               </div>
-              <h3 className="text-lg font-bold text-neutral-800">¡Catálogo Publicado Exitosamente!</h3>
-              <p className="text-xs text-neutral-500 max-w-xs mx-auto">
-                Tu catálogo interactivo está guardado en el servidor y listo para ser compartido con tus clientes.
+              <h3 className="text-base sm:text-lg font-bold text-neutral-800 dark:text-white">¡Catálogo Publicado!</h3>
+              <p className="text-xs text-neutral-500 dark:text-neutral-400 max-w-xs mx-auto">
+                Tu catálogo interactivo está listo para ser compartido por WhatsApp o redes sociales.
               </p>
             </div>
 
             {/* Link Box */}
-            <div className="bg-neutral-50 border border-neutral-100 rounded-xl p-3.5 space-y-2.5">
-              <span className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider block">Link de Acceso Clientes</span>
+            <div className="bg-neutral-50 dark:bg-black/50 border border-neutral-100 dark:border-neutral-800 rounded-xl p-3 space-y-2">
+              <span className="text-[10px] font-bold text-neutral-400 dark:text-neutral-500 uppercase tracking-wider block">Link de Acceso Clientes</span>
               <div className="flex gap-2">
                 <input
                   type="text"
                   readOnly
                   value={shareUrl}
-                  className="bg-white border border-neutral-200 text-xs text-neutral-600 px-3 py-2 rounded-lg flex-1 outline-none font-mono"
+                  className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 text-xs text-neutral-600 dark:text-neutral-300 px-3 py-2 rounded-lg flex-1 outline-none font-mono truncate"
                 />
                 <button
                   onClick={handleCopyLink}
-                  className="bg-neutral-900 hover:bg-neutral-800 text-white text-xs font-semibold px-3 py-2 rounded-lg transition inline-flex items-center gap-1.5"
+                  className="bg-neutral-900 hover:bg-neutral-800 dark:bg-white dark:hover:bg-neutral-200 text-white dark:text-black text-xs font-semibold px-3 py-2 rounded-lg transition inline-flex items-center gap-1.5 shrink-0"
                 >
                   {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
                   {copied ? 'Copiado' : 'Copiar'}
@@ -455,7 +704,7 @@ export default function App() {
             <div className="grid grid-cols-2 gap-2">
               <button
                 onClick={handleShareToWhatsApp}
-                className="bg-green-600 hover:bg-green-500 text-white font-semibold text-xs py-2.5 px-4 rounded-xl transition inline-flex items-center justify-center gap-1.5 shadow"
+                className="bg-green-600 hover:bg-green-500 text-white font-semibold text-xs py-3 px-4 rounded-xl transition inline-flex items-center justify-center gap-1.5 shadow active:scale-95"
               >
                 <Share2 className="w-4 h-4" />
                 WhatsApp
@@ -464,7 +713,7 @@ export default function App() {
                 href={shareUrl}
                 target="_blank"
                 rel="noreferrer"
-                className="bg-neutral-100 hover:bg-neutral-200 text-neutral-800 font-semibold text-xs py-2.5 px-4 rounded-xl transition inline-flex items-center justify-center gap-1.5"
+                className="bg-neutral-100 hover:bg-neutral-200 dark:bg-neutral-800 dark:hover:bg-neutral-700 text-neutral-800 dark:text-neutral-200 font-semibold text-xs py-3 px-4 rounded-xl transition inline-flex items-center justify-center gap-1.5 active:scale-95"
               >
                 <ExternalLink className="w-4 h-4" />
                 Abrir Catálogo
@@ -472,16 +721,16 @@ export default function App() {
             </div>
 
             {/* Offline / Physical Print PDF Option */}
-            <div className="pt-2 border-t border-neutral-100">
+            <div className="pt-2 border-t border-neutral-100 dark:border-neutral-800">
               <button
                 onClick={() => {
                   setSavedCatalogId(null);
                   setIsPdfModalOpen(true);
                 }}
-                className="w-full bg-neutral-50 hover:bg-neutral-100 text-neutral-700 text-xs font-semibold py-2.5 px-4 rounded-xl border border-neutral-200 transition inline-flex items-center justify-center gap-2"
+                className="w-full bg-neutral-50 hover:bg-neutral-100 dark:bg-neutral-800/60 dark:hover:bg-neutral-800 text-neutral-700 dark:text-neutral-300 text-xs font-semibold py-2.5 px-4 rounded-xl border border-neutral-200 dark:border-neutral-700 transition inline-flex items-center justify-center gap-2"
               >
-                <FileDown className="w-4 h-4 text-blue-600" />
-                Descargar Catálogo en PDF (Impresión / Offline)
+                <FileDown className="w-4 h-4 text-blue-500" />
+                Descargar Catálogo en PDF
               </button>
             </div>
           </div>

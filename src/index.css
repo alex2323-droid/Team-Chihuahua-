@@ -1,10 +1,109 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --bg-app: #f8fafc;
+  --bg-surface: #ffffff;
+  --bg-card: #ffffff;
+  --bg-muted: #f1f5f9;
+  --bg-input: #f8fafc;
+  --text-main: #09090b;
+  --text-muted: #52525b;
+  --text-sub: #71717a;
+  --border-main: #e4e4e7;
+  --border-sub: #f4f4f5;
+  color-scheme: light;
+}
+
+.dark {
+  --bg-app: #000000;
+  --bg-surface: #0a0a0a;
+  --bg-card: #121212;
+  --bg-muted: #18181b;
+  --bg-input: #121212;
+  --text-main: #ffffff;
+  --text-muted: #a1a1aa;
+  --text-sub: #71717a;
+  --border-main: #27272a;
+  --border-sub: #1e1e24;
+  color-scheme: dark;
+}
+
+html {
+  transition: background-color 0.25s ease, color 0.25s ease;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+html.dark {
+  background-color: #000000;
+  color: #ffffff;
+}
+
+body {
+  min-height: 100vh;
+  min-height: 100dvh;
+  overflow-x: hidden;
+}
+
+/* Smartphone Safe Area Utilities (iOS Notch, Home Bar, Dynamic Island) */
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 16px);
+}
+
+.pt-safe {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+.mb-safe {
+  margin-bottom: env(safe-area-inset-bottom, 16px);
+}
+
+/* Hide scrollbars for horizontal category lists on mobile while maintaining touch scroll */
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Touch-optimized button states */
+button, a {
+  -webkit-touch-callout: none;
+  user-select: none;
+}
+
+/* Custom sleek scrollbars in dark & light */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: #3f3f46;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #52525b;
+}
+
 /* Clean, Print-Ready styles for physical printing and browser Save-to-PDF */
 @media print {
   /* Hide creator UI, navbar, controls, buttons, device mockup frames, and cart */
   header,
   #creator-dashboard-root > header,
+  #mobile-bottom-nav,
   .no-print,
   button,
   input,
@@ -15,7 +114,8 @@
   }
 
   body,
-  html {
+  html,
+  html.dark {
     background: #ffffff !important;
     color: #000000 !important;
     font-size: 11pt !important;
@@ -49,4 +149,3 @@
     print-color-adjust: exact !important;
   }
 }
-

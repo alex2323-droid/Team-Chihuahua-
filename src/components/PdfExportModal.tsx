@@ -1,17 +1,20 @@
 import React, { useState } from 'react';
 import { BusinessInfo, CatalogSettings, Product } from '../types';
-import { generateCatalogPdf } from '../utils/pdfExport';
 import {
   FileDown,
   Printer,
   X,
   Check,
+  Columns,
   LayoutGrid,
   List,
   Sparkles,
-  HelpCircle,
-  FileText,
-  Loader2,
+  Info,
+  Phone,
+  Mail,
+  MapPin,
+  Instagram,
+  QrCode,
 } from 'lucide-react';
 
 interface PdfExportModalProps {
@@ -29,222 +32,226 @@ export default function PdfExportModal({
   settings,
   products,
 }: PdfExportModalProps) {
-  const [includePrices, setIncludePrices] = useState(true);
-  const [includeContact, setIncludeContact] = useState(true);
-  const [includeSku, setIncludeSku] = useState(settings.showSku);
-  const [includeAttributes, setIncludeAttributes] = useState(settings.showAttributes);
-  const [layoutStyle, setLayoutStyle] = useState<'grid' | 'detailed'>('grid');
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [progressMsg, setProgressMsg] = useState('');
+  const [columns, setColumns] = useState<2 | 3 | 4>(3);
+  const [includeCover, setIncludeCover] = useState<boolean>(true);
+  const [includePrices, setIncludePrices] = useState<boolean>(true);
+  const [includeSkus, setIncludeSkus] = useState<boolean>(true);
+  const [includeAttributes, setIncludeAttributes] = useState<boolean>(true);
+  const [includeContactFooter, setIncludeContactFooter] = useState<boolean>(true);
+  const [paperSize, setPaperSize] = useState<'A4' | 'Letter'>('A4');
+  const [isGenerating, setIsGenerating] = useState<boolean>(false);
 
   if (!isOpen) return null;
 
-  const handleDownloadPdf = async () => {
-    setIsGenerating(true);
-    setProgressMsg('Iniciando generación de PDF...');
-    try {
-      await generateCatalogPdf(business, settings, products, {
-        includePrices,
-        includeContact,
-        includeSku,
-        includeAttributes,
-        layoutStyle,
-        onProgress: (msg) => setProgressMsg(msg),
-      });
-      setTimeout(() => {
-        setIsGenerating(false);
-        setProgressMsg('');
-        onClose();
-      }, 800);
-    } catch (err: any) {
-      console.error('Error generating PDF:', err);
-      alert('Hubo un inconveniente al generar el PDF. Puedes utilizar la opción de "Imprimir Catálogo".');
-      setIsGenerating(false);
-      setProgressMsg('');
-    }
-  };
-
   const handlePrint = () => {
-    onClose();
-    // Allow modal animation to finish before opening print dialog
+    setIsGenerating(true);
     setTimeout(() => {
       window.print();
-    }, 200);
+      setIsGenerating(false);
+    }, 250);
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in duration-200">
-      <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-neutral-100 overflow-hidden">
-        {/* Header */}
-        <div className="bg-neutral-900 text-white p-5 flex items-center justify-between">
+    <div className="fixed inset-0 z-[9999] bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto animate-in fade-in duration-150">
+      <div className="bg-white dark:bg-[#0e0e10] text-neutral-900 dark:text-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl border border-neutral-200 dark:border-neutral-800 relative space-y-5 my-8 transition-colors">
+        {/* Modal Header */}
+        <div className="flex items-start justify-between border-b border-neutral-100 dark:border-neutral-800 pb-4">
           <div className="flex items-center gap-3">
-            <div className="p-2.5 bg-white/10 rounded-xl">
-              <FileDown className="w-5 h-5 text-blue-400" />
+            <div className="p-2.5 bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400 rounded-xl">
+              <FileDown className="w-6 h-6" />
             </div>
             <div>
-              <h3 className="text-base font-bold tracking-tight">Exportar Catálogo a PDF</h3>
-              <p className="text-xs text-neutral-400">
-                Listo para imprimir en físico o compartir por WhatsApp y correo
+              <h3 className="text-lg font-bold text-neutral-900 dark:text-white">
+                Exportar Catálogo en PDF / Imprimir
+              </h3>
+              <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5">
+                Genera un documento maquetado profesionalmente para enviar a clientes o imprimir en alta calidad.
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            disabled={isGenerating}
-            className="p-1.5 rounded-lg text-neutral-400 hover:text-white hover:bg-white/10 transition"
+            className="p-1.5 text-neutral-400 hover:text-neutral-600 dark:hover:text-white hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-lg transition"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Content */}
-        <div className="p-6 space-y-6">
-          {/* Summary badge */}
-          <div className="flex items-center justify-between p-3.5 bg-neutral-50 rounded-xl border border-neutral-200/80 text-xs">
-            <div className="flex items-center gap-2 text-neutral-700 font-medium">
-              <FileText className="w-4 h-4 text-blue-600" />
-              <span>{business.name || 'Catálogo Oficial'}</span>
+        {/* Configuration Options */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          {/* Column Layout */}
+          <div className="space-y-3">
+            <label className="block text-xs font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
+              Distribución de Cuadrícula (Columnas)
+            </label>
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={() => setColumns(2)}
+                className={`py-2 px-3 rounded-lg border text-xs font-medium flex flex-col items-center gap-1 transition ${
+                  columns === 2
+                    ? 'border-neutral-900 dark:border-white bg-neutral-100 dark:bg-neutral-900 text-neutral-900 dark:text-white font-bold'
+                    : 'border-neutral-200 dark:border-neutral-800 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-50 dark:hover:bg-neutral-900'
+                }`}
+              >
+                <Columns className="w-4 h-4" />
+                <span>2 Columnas</span>
+                <span className="text-[10px] text-neutral-400">Fotos grandes</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setColumns(3)}
+                className={`py-2 px-3 rounded-lg border text-xs font-medium flex flex-col items-center gap-1 transition ${
+                  columns === 3
+                    ? 'border-neutral-900 dark:border-white bg-neutral-100 dark:bg-neutral-900 text-neutral-900 dark:text-white font-bold'
+                    : 'border-neutral-200 dark:border-neutral-800 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-50 dark:hover:bg-neutral-900'
+                }`}
+              >
+                <LayoutGrid className="w-4 h-4" />
+                <span>3 Columnas</span>
+                <span className="text-[10px] text-neutral-400">Recomendado</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setColumns(4)}
+                className={`py-2 px-3 rounded-lg border text-xs font-medium flex flex-col items-center gap-1 transition ${
+                  columns === 4
+                    ? 'border-neutral-900 dark:border-white bg-neutral-100 dark:bg-neutral-900 text-neutral-900 dark:text-white font-bold'
+                    : 'border-neutral-200 dark:border-neutral-800 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-50 dark:hover:bg-neutral-900'
+                }`}
+              >
+                <LayoutGrid className="w-4 h-4" />
+                <span>4 Columnas</span>
+                <span className="text-[10px] text-neutral-400">Compacto</span>
+              </button>
             </div>
-            <span className="bg-neutral-200/70 text-neutral-700 px-2.5 py-1 rounded-full font-bold">
-              {products.length} {products.length === 1 ? 'producto' : 'productos'}
-            </span>
+
+            {/* Paper format */}
+            <div className="pt-2">
+              <label className="block text-xs font-bold text-neutral-700 dark:text-neutral-300 mb-1.5">
+                Tamaño de Papel
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPaperSize('A4')}
+                  className={`py-1.5 px-3 rounded-lg border text-xs font-semibold transition ${
+                    paperSize === 'A4'
+                      ? 'border-neutral-900 dark:border-white bg-neutral-100 dark:bg-neutral-900 text-neutral-900 dark:text-white'
+                      : 'border-neutral-200 dark:border-neutral-800 text-neutral-600 dark:text-neutral-400'
+                  }`}
+                >
+                  A4 Estándar (210 x 297 mm)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPaperSize('Letter')}
+                  className={`py-1.5 px-3 rounded-lg border text-xs font-semibold transition ${
+                    paperSize === 'Letter'
+                      ? 'border-neutral-900 dark:border-white bg-neutral-100 dark:bg-neutral-900 text-neutral-900 dark:text-white'
+                      : 'border-neutral-200 dark:border-neutral-800 text-neutral-600 dark:text-neutral-400'
+                  }`}
+                >
+                  Carta / Letter (8.5 x 11 pulg)
+                </button>
+              </div>
+            </div>
           </div>
 
-          {/* Configuration Options */}
+          {/* Content Checklist */}
           <div className="space-y-3">
-            <h4 className="text-xs font-bold text-neutral-500 uppercase tracking-wider">
-              Opciones del Documento
-            </h4>
+            <label className="block text-xs font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
+              Contenido a Incluir en el Documento
+            </label>
+            <div className="space-y-2 bg-neutral-50 dark:bg-black/50 p-3 rounded-xl border border-neutral-200 dark:border-neutral-800 text-xs">
+              <label className="flex items-center gap-2 cursor-pointer text-neutral-700 dark:text-neutral-300">
+                <input
+                  type="checkbox"
+                  checked={includeCover}
+                  onChange={(e) => setIncludeCover(e.target.checked)}
+                  className="rounded border-neutral-300 dark:border-neutral-700 text-neutral-900 dark:text-white focus:ring-neutral-500 w-4 h-4 accent-neutral-900 dark:accent-white"
+                />
+                <span>Cabecera con logo y datos de la tienda</span>
+              </label>
 
-            <div className="space-y-2">
-              <label className="flex items-center justify-between p-3 rounded-xl border border-neutral-200 hover:bg-neutral-50 cursor-pointer transition">
-                <span className="text-xs font-semibold text-neutral-800">
-                  Incluir precios de venta ({settings.currency})
-                </span>
+              <label className="flex items-center gap-2 cursor-pointer text-neutral-700 dark:text-neutral-300">
                 <input
                   type="checkbox"
                   checked={includePrices}
                   onChange={(e) => setIncludePrices(e.target.checked)}
-                  className="w-4 h-4 accent-neutral-900 rounded"
+                  className="rounded border-neutral-300 dark:border-neutral-700 text-neutral-900 dark:text-white focus:ring-neutral-500 w-4 h-4 accent-neutral-900 dark:accent-white"
                 />
+                <span>Precios de venta ({settings.currency})</span>
               </label>
 
-              <label className="flex items-center justify-between p-3 rounded-xl border border-neutral-200 hover:bg-neutral-50 cursor-pointer transition">
-                <span className="text-xs font-semibold text-neutral-800">
-                  Incluir contacto de la tienda (WhatsApp, Dirección, Redes)
-                </span>
+              <label className="flex items-center gap-2 cursor-pointer text-neutral-700 dark:text-neutral-300">
                 <input
                   type="checkbox"
-                  checked={includeContact}
-                  onChange={(e) => setIncludeContact(e.target.checked)}
-                  className="w-4 h-4 accent-neutral-900 rounded"
+                  checked={includeSkus}
+                  onChange={(e) => setIncludeSkus(e.target.checked)}
+                  className="rounded border-neutral-300 dark:border-neutral-700 text-neutral-900 dark:text-white focus:ring-neutral-500 w-4 h-4 accent-neutral-900 dark:accent-white"
                 />
+                <span>Códigos SKU de referencia</span>
               </label>
 
-              <label className="flex items-center justify-between p-3 rounded-xl border border-neutral-200 hover:bg-neutral-50 cursor-pointer transition">
-                <span className="text-xs font-semibold text-neutral-800">
-                  Incluir códigos SKU y atributos (tallas, colores)
-                </span>
+              <label className="flex items-center gap-2 cursor-pointer text-neutral-700 dark:text-neutral-300">
                 <input
                   type="checkbox"
-                  checked={includeSku}
-                  onChange={(e) => {
-                    setIncludeSku(e.target.checked);
-                    setIncludeAttributes(e.target.checked);
-                  }}
-                  className="w-4 h-4 accent-neutral-900 rounded"
+                  checked={includeAttributes}
+                  onChange={(e) => setIncludeAttributes(e.target.checked)}
+                  className="rounded border-neutral-300 dark:border-neutral-700 text-neutral-900 dark:text-white focus:ring-neutral-500 w-4 h-4 accent-neutral-900 dark:accent-white"
                 />
+                <span>Detalles (tallas, colores, disponibilidad)</span>
+              </label>
+
+              <label className="flex items-center gap-2 cursor-pointer text-neutral-700 dark:text-neutral-300">
+                <input
+                  type="checkbox"
+                  checked={includeContactFooter}
+                  onChange={(e) => setIncludeContactFooter(e.target.checked)}
+                  className="rounded border-neutral-300 dark:border-neutral-700 text-neutral-900 dark:text-white focus:ring-neutral-500 w-4 h-4 accent-neutral-900 dark:accent-white"
+                />
+                <span>Pie de página con instrucciones de compra</span>
               </label>
             </div>
           </div>
-
-          {/* Layout Style Picker */}
-          <div className="space-y-2.5">
-            <h4 className="text-xs font-bold text-neutral-500 uppercase tracking-wider">
-              Diseño de Maquetación
-            </h4>
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                type="button"
-                onClick={() => setLayoutStyle('grid')}
-                className={`p-3 rounded-xl border text-left transition flex items-start gap-3 ${
-                  layoutStyle === 'grid'
-                    ? 'border-neutral-900 bg-neutral-900/5 ring-1 ring-neutral-900'
-                    : 'border-neutral-200 hover:bg-neutral-50'
-                }`}
-              >
-                <div className="p-2 rounded-lg bg-neutral-100 text-neutral-800">
-                  <LayoutGrid className="w-4 h-4" />
-                </div>
-                <div>
-                  <p className="text-xs font-bold text-neutral-900">Cuadrícula (2 Col)</p>
-                  <p className="text-[11px] text-neutral-500">Tarjetas compactas estilo folleto</p>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setLayoutStyle('detailed')}
-                className={`p-3 rounded-xl border text-left transition flex items-start gap-3 ${
-                  layoutStyle === 'detailed'
-                    ? 'border-neutral-900 bg-neutral-900/5 ring-1 ring-neutral-900'
-                    : 'border-neutral-200 hover:bg-neutral-50'
-                }`}
-              >
-                <div className="p-2 rounded-lg bg-neutral-100 text-neutral-800">
-                  <List className="w-4 h-4" />
-                </div>
-                <div>
-                  <p className="text-xs font-bold text-neutral-900">Lista Detallada</p>
-                  <p className="text-[11px] text-neutral-500">Filas amplias con descripción</p>
-                </div>
-              </button>
-            </div>
-          </div>
-
-          {/* Real-time Progress Bar when generating */}
-          {isGenerating && (
-            <div className="p-3.5 bg-blue-50 border border-blue-200 rounded-xl space-y-2 animate-pulse">
-              <div className="flex items-center gap-2 text-xs font-semibold text-blue-800">
-                <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
-                <span>{progressMsg || 'Generando archivo PDF listo para impresión...'}</span>
-              </div>
-              <div className="w-full bg-blue-200 h-1.5 rounded-full overflow-hidden">
-                <div className="bg-blue-600 h-full w-4/5 animate-pulse rounded-full" />
-              </div>
-            </div>
-          )}
         </div>
 
-        {/* Footer Actions */}
-        <div className="bg-neutral-50 px-6 py-4 border-t border-neutral-100 flex flex-col sm:flex-row items-center justify-between gap-3">
+        {/* Tip Box */}
+        <div className="bg-blue-50/70 dark:bg-blue-950/30 border border-blue-100 dark:border-blue-900/50 p-3.5 rounded-xl flex items-start gap-2.5 text-xs text-blue-900 dark:text-blue-300">
+          <Info className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
+          <p className="leading-relaxed">
+            <span className="font-bold">Consejo para guardar como PDF:</span> Al hacer clic en{' '}
+            <em>"Generar PDF / Imprimir"</em>, se abrirá el diálogo del sistema. Selecciona en Destino{' '}
+            <strong>"Guardar como PDF"</strong> para obtener tu archivo descargable listo para enviar por WhatsApp o correo.
+          </p>
+        </div>
+
+        {/* Summary Info */}
+        <div className="flex items-center justify-between text-xs text-neutral-500 dark:text-neutral-400 pt-2 border-t border-neutral-100 dark:border-neutral-800">
+          <span>{products.length} productos listos para maquetar</span>
+          <span>Formato: {paperSize} • {columns} Columnas</span>
+        </div>
+
+        {/* Actions */}
+        <div className="flex items-center justify-end gap-3 pt-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2 text-xs font-semibold text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white rounded-lg transition"
+          >
+            Cancelar
+          </button>
           <button
             type="button"
             onClick={handlePrint}
             disabled={isGenerating}
-            className="w-full sm:w-auto px-4 py-2.5 rounded-xl border border-neutral-300 hover:bg-neutral-100 text-neutral-700 text-xs font-semibold transition flex items-center justify-center gap-2"
+            className="bg-neutral-900 hover:bg-neutral-800 dark:bg-white dark:hover:bg-neutral-200 text-white dark:text-black text-xs font-bold px-6 py-2.5 rounded-xl transition inline-flex items-center gap-2 shadow-md active:scale-95 disabled:opacity-50"
           >
             <Printer className="w-4 h-4" />
-            Imprimir / Guardar Sistema
-          </button>
-
-          <button
-            type="button"
-            onClick={handleDownloadPdf}
-            disabled={isGenerating || products.length === 0}
-            className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-neutral-900 hover:bg-neutral-800 disabled:opacity-50 text-white text-xs font-bold transition flex items-center justify-center gap-2 shadow-md"
-          >
-            {isGenerating ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                Exportando...
-              </>
-            ) : (
-              <>
-                <FileDown className="w-4 h-4" />
-                Descargar Archivo PDF (.pdf)
-              </>
-            )}
+            <span>{isGenerating ? 'Preparando...' : 'Generar PDF / Imprimir'}</span>
           </button>
         </div>
       </div>
