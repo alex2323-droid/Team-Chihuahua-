@@ -1119,14 +1119,40 @@ app.post("/api/auth/register", (req, res) => {
     if (!db["_sellers"]) db["_sellers"] = {};
     if (!db["_sessions"]) db["_sessions"] = {};
 
-    // Check if username or email already registered
+    // Check if username already registered
     const existingSellers = Object.values(db["_sellers"]) as any[];
-    const usernameTaken = existingSellers.some(
-      (s) => s.username?.toLowerCase() === cleanUsername || (cleanEmail && s.email?.toLowerCase() === cleanEmail)
+    const existingSeller = existingSellers.find(
+      (s) => s.username?.toLowerCase() === cleanUsername
     );
 
-    if (usernameTaken) {
-      return res.status(409).json({ error: "El nombre de usuario o correo ya se encuentra registrado." });
+    if (existingSeller) {
+      // If the password matches, treat as successful login
+      const isMatch = verifyPassword(String(password), existingSeller.passwordHash, existingSeller.salt);
+      if (isMatch) {
+        const token = generateToken();
+        const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+        db["_sessions"][token] = {
+          sellerId: existingSeller.id,
+          username: cleanUsername,
+          createdAt: new Date().toISOString(),
+          expiresAt: expiresAt,
+        };
+        writeDatabase(db);
+        return res.status(200).json({
+          success: true,
+          message: "¡Bienvenido a tu panel de vendedor!",
+          token,
+          seller: {
+            id: existingSeller.id,
+            username: existingSeller.username,
+            email: existingSeller.email,
+            name: existingSeller.name,
+            storeName: existingSeller.storeName,
+            createdAt: existingSeller.createdAt,
+          },
+        });
+      }
+      return res.status(409).json({ error: "El nombre de usuario ya está registrado. Inicia sesión con tu contraseña." });
     }
 
     const { hash, salt } = hashPassword(password);
