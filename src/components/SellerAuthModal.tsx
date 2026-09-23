@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { X, Lock, User, RefreshCw, Sparkles, CheckCircle } from 'lucide-react';
 import { Catalog } from '../types';
+import { registerSeller, loginSeller } from '../utils/firebaseSync';
 
 interface SellerAuthModalProps {
   isOpen: boolean;
@@ -29,32 +30,18 @@ export default function SellerAuthModal({ isOpen, onClose, onSuccess }: SellerAu
     }
 
     setLoading(true);
-    const endpoint = isRegister ? '/api/seller/register' : '/api/seller/login';
 
     try {
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          username: username.trim(),
-          password: password.trim()
-        })
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Ocurrió un error al procesar tu solicitud.');
-      }
-
       if (isRegister) {
+        const catalog = await registerSeller(username.trim(), password.trim());
         setSuccessMsg('¡Usuario registrado con éxito! Iniciando sesión...');
         setTimeout(() => {
-          onSuccess(data.username, data.catalog);
+          onSuccess(username.trim().toLowerCase(), catalog as Catalog);
           onClose();
         }, 1500);
       } else {
-        onSuccess(data.username, data.catalog);
+        const catalog = await loginSeller(username.trim(), password.trim());
+        onSuccess(username.trim().toLowerCase(), catalog as Catalog);
         onClose();
       }
     } catch (err: any) {

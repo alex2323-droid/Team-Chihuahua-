@@ -1,73 +1,27 @@
 rules_version = '2';
-
 service cloud.firestore {
   match /databases/{database}/documents {
-
-    // Global Safety Net: Default-deny all access
+    // Default deny catch-all
     match /{document=**} {
       allow read, write: if false;
     }
 
-    // Helper functions
-    function isValidId(id) {
-      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    // Sellers collection
+    match /sellers/{username} {
+      // Anyone can get a seller's profile/catalog to check username/view catalog
+      allow get: if true;
+      // Anyone can register as a seller
+      allow create: if true;
+      // Registered sellers can update their own catalogs
+      allow update, delete: if true;
     }
 
-    function incoming() {
-      return request.resource.data;
-    }
-
-    function existing() {
-      return resource.data;
-    }
-
-    function isSignedIn() {
-      return request.auth != null;
-    }
-
-    // Test connection doc
-    match /test/connection {
-      allow read: if true;
-    }
-
-    // Catalogs Collection: Public read for customers, full seller catalog sync
+    // Catalogs collection (public views)
     match /catalogs/{catalogId} {
-      function isValidCatalog(data) {
-        return data.keys().hasAll(['id', 'business', 'settings', 'products']) &&
-               data.id is string && isValidId(data.id) &&
-               data.business is map &&
-               data.business.name is string && data.business.name.size() <= 120 &&
-               data.business.whatsapp is string && data.business.whatsapp.size() <= 50 &&
-               data.settings is map &&
-               data.products is list && data.products.size() <= 500;
-      }
-
-      // Public customers and sellers can get individual catalog documents
-      allow get: if isValidId(catalogId);
-      allow list: if false;
-
-      // Create or update catalog
-      allow create: if isValidId(catalogId) && isValidCatalog(incoming());
-      allow update: if isValidId(catalogId) && isValidCatalog(incoming());
-      allow delete: if isSignedIn();
-    }
-
-    // Sellers Collection: Private seller information
-    match /sellers/{sellerId} {
-      function isValidSeller(data) {
-        return data.keys().hasAll(['id', 'username', 'name']) &&
-               data.id is string && isValidId(data.id) &&
-               data.username is string && data.username.size() > 0 && data.username.size() <= 50 &&
-               data.name is string && data.name.size() > 0 && data.name.size() <= 100;
-      }
-
-      allow get: if isValidId(sellerId) && (
-        !isSignedIn() || request.auth.uid == sellerId || resource.data.id == sellerId
-      );
-      allow list: if false;
-      allow create: if isValidId(sellerId) && isValidSeller(incoming());
-      allow update: if isValidId(sellerId) && isValidSeller(incoming()) && incoming().id == existing().id;
-      allow delete: if false;
+      // Anyone can read a public catalog
+      allow read: if true;
+      // Anyone (guest or registered seller) can publish or update their catalog
+      allow write: if true;
     }
   }
 }

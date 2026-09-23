@@ -6,6 +6,9 @@ import ProductList from './components/ProductList';
 import CatalogPreview from './components/CatalogPreview';
 import PdfExportModal from './components/PdfExportModal';
 import SellerAuthModal from './components/SellerAuthModal';
+import { saveSellerCatalog, getPublicCatalog, savePublicCatalog } from './utils/firebaseSync';
+import { doc, getDoc } from 'firebase/firestore';
+import { db } from './firebase';
 import {
   Sparkles,
   Share2,
@@ -181,26 +184,25 @@ export default function App() {
       JSON.stringify({ business, settings, products, catalogId: savedCatalogId })
     );
 
-    // If logged in as seller, auto-sync back-to-back to cloud (PostgreSQL-backed Node server)
+    // If logged in as seller, auto-sync back-to-back to cloud (Firebase Firestore)
     if (currentSeller) {
       const delayDebounce = setTimeout(async () => {
         try {
-          await fetch('/api/seller/save-catalog', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              username: currentSeller,
-              catalog: {
-                id: savedCatalogId || `CAT-${Math.random().toString(36).substring(2, 10).toUpperCase()}`,
-                business,
-                settings,
-                products,
-              },
-            }),
-          });
-          console.log('[Cloud] Autoguardado exitoso.');
+          const finalCatalogId = savedCatalogId || `CAT-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
+          if (!savedCatalogId) {
+            setSavedCatalogId(finalCatalogId);
+          }
+          const catalogObj = {
+            id: finalCatalogId,
+            business,
+            settings,
+            products,
+          };
+          await saveSellerCatalog(currentSeller, catalogObj);
+          await savePublicCatalog(finalCatalogId, catalogObj);
+          console.log('[Cloud] Autoguardado exitoso en Firebase.');
         } catch (err) {
-          console.error('Error auto-guardando en la nube:', err);
+          console.error('Error auto-guardando en Firebase:', err);
         }
       }, 1500); // 1.5s debounce to minimize network overhead while typing
       return () => clearTimeout(delayDebounce);
@@ -211,14 +213,10 @@ export default function App() {
     setIsLoadingCatalog(true);
     setCatalogError(null);
     try {
-      const response = await fetch(`/api/catalogs/${id}`);
-      if (!response.ok) {
-        throw new Error('No se pudo encontrar el catálogo solicitado.');
-      }
-      const data: Catalog = await response.json();
+      const data = await getPublicCatalog(id);
       setBusiness(data.business);
       setSettings(data.settings);
-      setProducts(data.products);
+      setProducts(data.products || []);
       setIsCustomerView(true); // Direct customer presentation mode
     } catch (error: any) {
       console.error('Error loading catalog:', error);
@@ -231,13 +229,18 @@ export default function App() {
   const loadSellerCatalog = async (username: string) => {
     setIsLoadingCatalog(true);
     try {
-      const response = await fetch(`/api/seller/catalog?username=${encodeURIComponent(username)}`);
-      if (response.ok) {
-        const data = await response.json();
-        setBusiness(data.business);
-        setSettings(data.settings);
-        setProducts(data.products);
-        setSavedCatalogId(data.id);
+      const cleanUsername = username.trim().toLowerCase();
+      const sellerRef = doc(db, 'sellers', cleanUsername);
+      const docSnap = await getDoc(sellerRef);
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        const cat = data.catalog;
+        if (cat) {
+          setBusiness(cat.business);
+          setSettings(cat.settings);
+          setProducts(cat.products || []);
+          setSavedCatalogId(cat.id);
+        }
       }
     } catch (err) {
       console.error('Error al recuperar catálogo del vendedor:', err);
@@ -269,52 +272,23 @@ export default function App() {
 
     setIsSaving(true);
     try {
-      let finalCatalogId = savedCatalogId;
-      
+      const finalCatalogId = savedCatalogId || `CAT-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
+      setSavedCatalogId(finalCatalogId);
+
+      const catalogObj = {
+        id: finalCatalogId,
+        business,
+        settings,
+        products,
+      };
+
       // If logged in, save under their active profile
       if (currentSeller) {
-        const response = await fetch('/api/seller/save-catalog', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            username: currentSeller,
-            catalog: {
-              id: savedCatalogId || `CAT-${Math.random().toString(36).substring(2, 10).toUpperCase()}`,
-              business,
-              settings,
-              products,
-            },
-          }),
-        });
-
-        if (!response.ok) {
-          throw new Error('No se pudo guardar la configuración en tu cuenta.');
-        }
-
-        const data = await response.json();
-        finalCatalogId = data.catalogId;
-        setSavedCatalogId(data.catalogId);
-      } else {
-        // Guest save to global directory
-        const response = await fetch('/api/catalogs', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            id: savedCatalogId || undefined,
-            business,
-            settings,
-            products,
-          }),
-        });
-
-        if (!response.ok) {
-          throw new Error('Error al publicar el catálogo de forma anónima.');
-        }
-
-        const data = await response.json();
-        finalCatalogId = data.id;
-        setSavedCatalogId(data.id);
+        await saveSellerCatalog(currentSeller, catalogObj);
       }
+      
+      // Save/Publish to public catalogs collection
+      await savePublicCatalog(finalCatalogId, catalogObj);
 
       setIsShareModalOpen(true);
     } catch (error: any) {

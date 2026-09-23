@@ -1,92 +1,57 @@
 {
   "entities": {
-    "BusinessInfo": {
-      "title": "BusinessInfo",
-      "description": "Information about the store / business.",
+    "Seller": {
+      "title": "Seller",
+      "description": "Information and catalog configuration for a registered seller",
       "type": "object",
       "properties": {
-        "name": { "type": "string", "maxLength": 100 },
-        "whatsapp": { "type": "string", "maxLength": 30 },
-        "instagram": { "type": "string", "maxLength": 50 },
-        "address": { "type": "string", "maxLength": 200 },
-        "paymentMethods": { "type": "array" },
-        "additionalInfo": { "type": "string", "maxLength": 500 },
-        "logoUrl": { "type": "string", "maxLength": 1000 }
+        "username": {
+          "type": "string",
+          "description": "Unique username for the seller"
+        },
+        "password": {
+          "type": "string",
+          "description": "Password for the seller"
+        },
+        "catalog": {
+          "type": "object",
+          "description": "Complete catalog data including business profile, settings, and products list"
+        }
       },
-      "required": ["name", "whatsapp"]
-    },
-    "CatalogSettings": {
-      "title": "CatalogSettings",
-      "description": "Visual and functional settings for catalog display.",
-      "type": "object",
-      "properties": {
-        "primaryColor": { "type": "string", "maxLength": 20 },
-        "secondaryColor": { "type": "string", "maxLength": 20 },
-        "theme": { "type": "string", "maxLength": 20 },
-        "darkMode": { "type": "boolean" },
-        "currency": { "type": "string", "maxLength": 10 },
-        "layout": { "type": "string", "maxLength": 20 },
-        "showSku": { "type": "boolean" },
-        "showAttributes": { "type": "boolean" }
-      }
-    },
-    "Product": {
-      "title": "Product",
-      "description": "Product item in the catalog.",
-      "type": "object",
-      "properties": {
-        "id": { "type": "string", "maxLength": 64 },
-        "name": { "type": "string", "maxLength": 150 },
-        "price": { "type": "number" },
-        "originalPrice": { "type": "number" },
-        "imageUrl": { "type": "string", "maxLength": 2000 },
-        "description": { "type": "string", "maxLength": 1000 },
-        "category": { "type": "string", "maxLength": 60 },
-        "imageAnalysisStatus": { "type": "string", "maxLength": 20 },
-        "attributes": { "type": "object" }
-      },
-      "required": ["id", "name", "price", "imageUrl"]
+      "required": ["username", "password", "catalog"]
     },
     "Catalog": {
       "title": "Catalog",
-      "description": "Published catalog document.",
+      "description": "Public catalog data stored under its unique ID for customers to access",
       "type": "object",
       "properties": {
-        "id": { "type": "string", "maxLength": 64 },
-        "sellerId": { "type": "string", "maxLength": 128 },
-        "business": { "$ref": "#/entities/BusinessInfo" },
-        "settings": { "$ref": "#/entities/CatalogSettings" },
-        "products": { "type": "array" },
-        "createdAt": { "type": "string" },
-        "updatedAt": { "type": "string" }
+        "id": {
+          "type": "string"
+        },
+        "business": {
+          "type": "object"
+        },
+        "settings": {
+          "type": "object"
+        },
+        "products": {
+          "type": "array"
+        },
+        "createdAt": {
+          "type": "string"
+        }
       },
       "required": ["id", "business", "settings", "products"]
-    },
-    "Seller": {
-      "title": "Seller",
-      "description": "Registered seller profile.",
-      "type": "object",
-      "properties": {
-        "id": { "type": "string", "maxLength": 128 },
-        "username": { "type": "string", "maxLength": 50 },
-        "name": { "type": "string", "maxLength": 100 },
-        "storeName": { "type": "string", "maxLength": 100 },
-        "phone": { "type": "string", "maxLength": 30 },
-        "email": { "type": "string", "maxLength": 100 },
-        "createdAt": { "type": "string" },
-        "updatedAt": { "type": "string" }
-      },
-      "required": ["id", "username", "name"]
     }
   },
   "firestore": {
-    "/catalogs/{catalogId}": {
-      "schema": { "$ref": "#/entities/Catalog" },
-      "description": "Public and seller digital product catalogs."
+    "sellers/{username}": {
+      "schema": "Seller",
+      "description": "Collection of registered sellers and their respective catalogs"
     },
-    "/sellers/{sellerId}": {
-      "schema": { "$ref": "#/entities/Seller" },
-      "description": "Seller profile and account records."
+    "catalogs/{catalogId}": {
+      "schema": "Catalog",
+      "description": "Publicly accessible catalogs for clients/customers"
     }
   }
 }
