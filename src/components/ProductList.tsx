@@ -307,16 +307,31 @@ export default function ProductList({ products, setProducts, currency }: Product
                         </div>
                       </div>
 
-                      {/* Miniatura grande con opción de re-subir */}
-                      <div className="md:col-span-1 flex flex-row md:flex-col items-center justify-between md:justify-center p-3 border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 rounded-xl gap-3">
-                        <img
-                          src={product.imageUrl}
-                          alt="preview"
-                          referrerPolicy="no-referrer"
-                          onError={(e) => handleImageError(e, product.imageUrl)}
-                          onClick={() => setZoomedImage(product.imageUrl)}
-                          className="w-16 h-16 sm:w-20 sm:h-20 rounded-lg object-cover bg-neutral-100 dark:bg-black border border-neutral-200 dark:border-neutral-700 cursor-zoom-in hover:opacity-90 transition"
-                        />
+                      {/* Miniatura grande con opción de re-subir y URL */}
+                      <div className="md:col-span-1 flex flex-col items-stretch p-3 border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 rounded-xl gap-2.5">
+                        <div className="flex items-center justify-center">
+                          <img
+                            src={product.imageUrl}
+                            alt="preview"
+                            referrerPolicy="no-referrer"
+                            onError={(e) => handleImageError(e, product.imageUrl)}
+                            onClick={() => setZoomedImage(product.imageUrl)}
+                            className="w-20 h-20 sm:w-24 sm:h-24 rounded-lg object-cover bg-neutral-100 dark:bg-black border border-neutral-200 dark:border-neutral-700 cursor-zoom-in hover:opacity-90 transition shadow-xs"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] font-semibold text-neutral-500 dark:text-neutral-400 mb-1">Enlace de la Foto (URL)</label>
+                          <input
+                            type="url"
+                            placeholder="https://..."
+                            value={product.imageUrl?.startsWith('data:') ? 'Imagen cargada en local' : product.imageUrl}
+                            disabled={product.imageUrl?.startsWith('data:')}
+                            onChange={(e) => handleUpdateProduct(product.id, { imageUrl: e.target.value, imageQuality: undefined })}
+                            className="w-full px-2 py-1 text-[11px] bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 text-neutral-800 dark:text-neutral-200 rounded-lg focus:ring-1 focus:ring-neutral-950 focus:outline-none"
+                          />
+                        </div>
+
                         <input
                           type="file"
                           accept="image/*"
@@ -335,9 +350,9 @@ export default function ProductList({ products, setProducts, currency }: Product
                         />
                         <label
                           htmlFor={`replace-img-${product.id}`}
-                          className="text-xs text-neutral-700 dark:text-neutral-200 hover:text-neutral-900 dark:hover:text-white font-semibold cursor-pointer border border-neutral-200 dark:border-neutral-700 px-3 py-2 rounded-xl hover:bg-neutral-50 dark:hover:bg-neutral-800 transition min-h-[40px] flex items-center justify-center"
+                          className="text-xs text-neutral-700 dark:text-neutral-200 hover:text-neutral-900 dark:hover:text-white font-semibold cursor-pointer border border-neutral-200 dark:border-neutral-700 px-3 py-1.5 rounded-lg hover:bg-neutral-50 dark:hover:bg-neutral-800 transition min-h-[34px] flex items-center justify-center text-center"
                         >
-                          Cambiar Foto
+                          Subir otra Foto
                         </label>
                       </div>
                     </div>

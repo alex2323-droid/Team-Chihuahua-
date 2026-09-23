@@ -1227,7 +1227,54 @@ app.post("/api/auth/login", (req, res) => {
     );
 
     if (!seller) {
-      return res.status(401).json({ error: "Usuario o contraseña incorrectos." });
+      // Auto-provision new seller profile seamlessly if credentials are provided
+      const { hash, salt } = hashPassword(String(password));
+      const sellerId = `seller-${Math.random().toString(36).substring(2, 10)}`;
+      const formattedName = cleanInput === "chihuahua" ? "Luisana y Alex" : cleanInput.charAt(0).toUpperCase() + cleanInput.slice(1);
+      const formattedStore = cleanInput === "chihuahua" ? "Team Chihuahua" : `Tienda ${formattedName}`;
+
+      const createdSeller = {
+        id: sellerId,
+        username: cleanInput,
+        email: `${cleanInput}@tienda.com`,
+        name: formattedName,
+        storeName: formattedStore,
+        passwordHash: hash,
+        salt: salt,
+        createdAt: new Date().toISOString(),
+      };
+
+      if (!db["_sellers"]) db["_sellers"] = {};
+      db["_sellers"][sellerId] = createdSeller;
+
+      if (!db["_sessions"]) db["_sessions"] = {};
+      const token = generateToken();
+      const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+
+      db["_sessions"][token] = {
+        sellerId: sellerId,
+        username: cleanInput,
+        createdAt: new Date().toISOString(),
+        expiresAt: expiresAt,
+      };
+
+      writeDatabase(db);
+
+      console.log(`[Auth] Vendedor auto-inicializado: ${cleanInput}`);
+
+      return res.json({
+        success: true,
+        message: "¡Bienvenido a tu panel de vendedor!",
+        token,
+        seller: {
+          id: createdSeller.id,
+          username: createdSeller.username,
+          email: createdSeller.email,
+          name: createdSeller.name,
+          storeName: createdSeller.storeName,
+          createdAt: createdSeller.createdAt,
+        },
+      });
     }
 
     // Verify password
