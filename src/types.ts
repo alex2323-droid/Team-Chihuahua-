@@ -62,10 +62,12 @@ export interface CatalogSettings {
 
 export interface Catalog {
   id: string;
+  sellerId?: string;
   business: BusinessInfo;
   settings: CatalogSettings;
   products: Product[];
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface ImageAnalysisResponse {

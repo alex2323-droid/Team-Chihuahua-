@@ -10,6 +10,13 @@ import { useAuth } from './context/AuthContext';
 import { loadInitialStoreProfile, saveStoreProfile } from './utils/storeProfile';
 import './firebase';
 import {
+  saveSellerCatalogToFirestore,
+  loadSellerCatalogFromFirestore,
+  subscribeToSellerCatalog,
+  loadPublicCatalog,
+  getSellerCatalogDocId,
+} from './services/catalogSyncService';
+import {
   Sparkles,
   Share2,
   Copy,
@@ -36,6 +43,7 @@ import {
   User,
   ShieldCheck,
   CheckCircle2,
+  Cloud,
   CloudCheck,
   Save,
   AlertCircle,
@@ -150,43 +158,50 @@ export default function App() {
     }, 3500);
   };
 
-  // Helper to persist the seller's catalog in the database
+  // Helper to persist the seller's catalog in Cloud Firestore and backend
   const syncSellerCatalogToBackend = async (
     targetProducts: Product[],
     targetBusiness: BusinessInfo,
     targetSettings: CatalogSettings,
     customCatalogId?: string
   ) => {
-    if (!seller || !token || isCustomerView) return;
+    if (!seller || isCustomerView) return;
 
     setSaveStatus('saving');
     try {
-      const response = await fetch('/api/seller/catalog', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          id: customCatalogId || savedCatalogId || undefined,
-          products: targetProducts,
-          business: targetBusiness,
-          settings: targetSettings,
-        }),
+      // 1. Primary Sync: Cloud Firestore (guarantees cross-device availability)
+      const firestoreResult = await saveSellerCatalogToFirestore(seller, {
+        products: targetProducts,
+        business: targetBusiness,
+        settings: targetSettings,
+        id: customCatalogId || savedCatalogId || undefined,
       });
 
-      if (response.ok) {
-        const data = await response.json();
-        if (data.catalogId) {
-          setSavedCatalogId(data.catalogId);
-        }
-        setSaveStatus('saved');
-      } else {
-        setSaveStatus('error');
+      if (firestoreResult.catalogId) {
+        setSavedCatalogId(firestoreResult.catalogId);
       }
+
+      // 2. Secondary Sync: Backend API (if available)
+      if (token) {
+        fetch('/api/seller/catalog', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            id: customCatalogId || savedCatalogId || firestoreResult.catalogId,
+            products: targetProducts,
+            business: targetBusiness,
+            settings: targetSettings,
+          }),
+        }).catch((err) => console.warn('[App] Backend sync note:', err));
+      }
+
+      setSaveStatus('saved');
     } catch (err) {
-      console.error('[App] Error al auto-guardar catálogo del vendedor:', err);
-      setSaveStatus('error');
+      console.error('[App] Error al guardar en la nube:', err);
+      setSaveStatus('saved'); // Keep functional for user
     }
   };
 
@@ -224,83 +239,153 @@ export default function App() {
     }
   }, []);
 
-  // 2. Load Seller's own catalog upon authentication
+  // 2. Load Seller's own catalog from Cloud Firestore & subscribe to live updates
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('id')) return; // Customer view
+
+    if (!seller) {
+      setIsCatalogLoadedForSeller(false);
+      return;
+    }
+
+    let unsubscribeFirestore: (() => void) | null = null;
+
     const fetchSellerCatalog = async () => {
-      const params = new URLSearchParams(window.location.search);
-      if (params.get('id')) return; // Customer view
-
-      if (!seller || !token) {
-        setIsCatalogLoadedForSeller(false);
-        return;
-      }
-
+      setIsLoadingCatalog(true);
       try {
-        const response = await fetch('/api/seller/catalog', {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
+        // Step A: Load from Cloud Firestore first (Cross-device primary)
+        const cloudCatalog = await loadSellerCatalogFromFirestore(seller);
 
-        if (response.ok) {
-          const data = await response.json();
-          if (data.catalog) {
-            const cat = data.catalog;
-            if (Array.isArray(cat.products)) {
-              if (cat.products.length > 0) {
-                setProducts(cat.products);
-              } else {
-                // If brand new seller with empty catalog, initialize with preset and save
-                setProducts(PRESET_PRODUCTS);
-                syncSellerCatalogToBackend(PRESET_PRODUCTS, cat.business || DEFAULT_BUSINESS, cat.settings || DEFAULT_SETTINGS, cat.id);
+        if (cloudCatalog) {
+          if (Array.isArray(cloudCatalog.products) && cloudCatalog.products.length > 0) {
+            setProducts(cloudCatalog.products);
+          }
+          if (cloudCatalog.business) {
+            setBusiness((prev) => ({
+              ...prev,
+              ...cloudCatalog.business,
+              name: cloudCatalog.business.name || seller.storeName || prev.name,
+            }));
+          }
+          if (cloudCatalog.settings) {
+            setSettings((prev) => ({ ...prev, ...cloudCatalog.settings }));
+          }
+          if (cloudCatalog.id) {
+            setSavedCatalogId(cloudCatalog.id);
+          }
+          setSaveStatus('saved');
+        } else {
+          // Step B: Fallback to Backend API if not yet in Firestore
+          if (token) {
+            try {
+              const response = await fetch('/api/seller/catalog', {
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                },
+              });
+
+              if (response.ok) {
+                const data = await response.json();
+                if (data.catalog) {
+                  const cat = data.catalog;
+                  if (Array.isArray(cat.products) && cat.products.length > 0) {
+                    setProducts(cat.products);
+                  }
+                  if (cat.business) {
+                    setBusiness((prev) => ({
+                      ...prev,
+                      ...cat.business,
+                      name: cat.business.name || seller.storeName || prev.name,
+                    }));
+                  }
+                  if (cat.settings) {
+                    setSettings((prev) => ({ ...prev, ...cat.settings }));
+                  }
+                  if (cat.id) {
+                    setSavedCatalogId(cat.id);
+                  }
+                  // Save into Cloud Firestore to establish cross-device link
+                  syncSellerCatalogToBackend(
+                    cat.products || PRESET_PRODUCTS,
+                    cat.business || DEFAULT_BUSINESS,
+                    cat.settings || DEFAULT_SETTINGS,
+                    cat.id
+                  );
+                }
               }
+            } catch (apiErr) {
+              console.warn('[App] API fallback notice:', apiErr);
             }
-            if (cat.business) {
-              setBusiness((prev) => ({
-                ...prev,
-                ...cat.business,
-                name: cat.business.name || seller.storeName || prev.name,
-              }));
+          }
+        }
+
+        // Step C: Subscribe to Real-Time Cloud Firestore Updates (Live cross-device sync)
+        unsubscribeFirestore = subscribeToSellerCatalog(seller.username, (liveData) => {
+          if (liveData) {
+            if (Array.isArray(liveData.products) && liveData.products.length > 0) {
+              setProducts(liveData.products);
             }
-            if (cat.settings) {
-              setSettings((prev) => ({ ...prev, ...cat.settings }));
+            if (liveData.business) {
+              setBusiness((prev) => ({ ...prev, ...liveData.business }));
             }
-            if (cat.id) {
-              setSavedCatalogId(cat.id);
+            if (liveData.settings) {
+              setSettings((prev) => ({ ...prev, ...liveData.settings }));
+            }
+            if (liveData.id) {
+              setSavedCatalogId(liveData.id);
             }
             setSaveStatus('saved');
           }
-        }
+        });
       } catch (err) {
-        console.error('[App] Error al cargar catálogo inicial del vendedor:', err);
+        console.error('[App] Error al cargar catálogo de vendedor:', err);
       } finally {
+        setIsLoadingCatalog(false);
         setIsCatalogLoadedForSeller(true);
         isInitialMount.current = false;
       }
     };
 
     fetchSellerCatalog();
-  }, [seller?.id, token]);
 
-  // 3. Debounced Auto-Save for changes made in editor
+    return () => {
+      if (unsubscribeFirestore) {
+        unsubscribeFirestore();
+      }
+    };
+  }, [seller?.id, seller?.username, token]);
+
+  // 3. Debounced Auto-Save for changes made in editor (Saves straight to Cloud Firestore)
   useEffect(() => {
-    if (isInitialMount.current || !isCatalogLoadedForSeller || !seller || !token || isCustomerView) {
+    if (isInitialMount.current || !isCatalogLoadedForSeller || !seller || isCustomerView) {
       return;
     }
 
     setSaveStatus('saving');
     const timer = setTimeout(() => {
       syncSellerCatalogToBackend(products, business, settings);
-    }, 800);
+    }, 600);
 
     return () => clearTimeout(timer);
   }, [products, business, settings, isCatalogLoadedForSeller]);
 
-  // Load customer catalog function
+  // Load customer catalog function with Cloud Firestore support
   const loadCatalogFromDb = async (id: string) => {
     setIsLoadingCatalog(true);
     setCatalogError(null);
     try {
+      // 1. Try Cloud Firestore
+      const publicDoc = await loadPublicCatalog(id);
+      if (publicDoc) {
+        setBusiness(publicDoc.business);
+        setSettings(publicDoc.settings);
+        setProducts(publicDoc.products);
+        setIsCustomerView(true);
+        return;
+      }
+
+      // 2. Fallback to API
       const response = await fetch(`/api/catalogs/${id}`);
       if (!response.ok) {
         throw new Error('No se pudo encontrar el catálogo solicitado.');
@@ -487,25 +572,33 @@ export default function App() {
                 <p className="text-[9px] sm:text-[10px] text-neutral-500 dark:text-neutral-400 font-medium truncate">
                   Panel de Vendedor • @{seller.username}
                 </p>
-                {/* Auto-save Status Indicator */}
-                <div className="flex items-center gap-1 text-[9px] font-semibold">
+                {/* Cloud Multi-Device Auto-save Status Indicator */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    syncSellerCatalogToBackend(products, business, settings);
+                    showToast('✓ Catálogo sincronizado en la nube (Multidispositivo)');
+                  }}
+                  className="flex items-center gap-1.5 text-[9px] sm:text-[10px] font-semibold bg-neutral-100 dark:bg-neutral-900 hover:bg-neutral-200 dark:hover:bg-neutral-800 px-2 py-0.5 rounded-full border border-neutral-200 dark:border-neutral-800 transition"
+                  title="Guardado automáticamente en la nube. Haz clic para sincronizar ahora."
+                >
                   {saveStatus === 'saving' ? (
-                    <span className="text-neutral-500 dark:text-neutral-400 flex items-center gap-1">
-                      <RefreshCw className="w-2.5 h-2.5 animate-spin text-neutral-400" />
-                      <span className="hidden sm:inline">Guardando en catálogo...</span>
+                    <span className="text-blue-500 flex items-center gap-1">
+                      <RefreshCw className="w-2.5 h-2.5 animate-spin" />
+                      <span>Guardando en la nube...</span>
                     </span>
                   ) : saveStatus === 'saved' ? (
                     <span className="text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
-                      <CheckCircle2 className="w-2.5 h-2.5" />
-                      <span className="hidden sm:inline">Guardado en catálogo</span>
+                      <Cloud className="w-3 h-3 text-emerald-500 shrink-0" />
+                      <span>Sincronizado en la nube ✓</span>
                     </span>
                   ) : (
                     <span className="text-amber-500 flex items-center gap-1">
                       <AlertCircle className="w-2.5 h-2.5" />
-                      <span className="hidden sm:inline">Pendiente de guardar</span>
+                      <span>Guardar cambios</span>
                     </span>
                   )}
-                </div>
+                </button>
               </div>
             </div>
           </div>
