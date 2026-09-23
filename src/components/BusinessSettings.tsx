@@ -24,6 +24,7 @@ import {
   LogOut,
 } from 'lucide-react';
 import { compressLogoImage, saveStoreProfile } from '../utils/storeProfile';
+import { saveSellerCatalogToFirestore } from '../services/catalogSyncService';
 
 interface BusinessSettingsProps {
   business: BusinessInfo;
@@ -116,6 +117,16 @@ export default function BusinessSettings({
 
     try {
       const result = await saveStoreProfile(business, settings);
+      
+      // Also persist to Cloud Firestore directly for instant multi-device sync
+      if (seller) {
+        saveSellerCatalogToFirestore(seller, {
+          products: [],
+          business,
+          settings,
+        }).catch((e) => console.warn('[BusinessSettings] Cloud sync warning:', e));
+      }
+
       setSaveStatus('saved');
       const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       setLastSavedTime(timeStr);
@@ -150,13 +161,18 @@ export default function BusinessSettings({
     try {
       // Compress and optimize logo to max 360x360 px canvas
       const compressedDataUrl = await compressLogoImage(file, 360);
-      setBusiness((prev) => ({ ...prev, logoUrl: compressedDataUrl }));
+      const updatedBusiness = { ...business, logoUrl: compressedDataUrl };
+      setBusiness(updatedBusiness);
 
-      // Immediately persist with the new logo
-      await saveStoreProfile(
-        { ...business, logoUrl: compressedDataUrl },
-        settings
-      );
+      // Immediately persist with the new logo locally & cloud
+      await saveStoreProfile(updatedBusiness, settings);
+      if (seller) {
+        saveSellerCatalogToFirestore(seller, {
+          products: [],
+          business: updatedBusiness,
+          settings,
+        }).catch(() => {});
+      }
       setSaveStatus('saved');
       setToastMessage('¡Logotipo actualizado y guardado correctamente!');
       setTimeout(() => setToastMessage(null), 3500);
@@ -170,11 +186,16 @@ export default function BusinessSettings({
   };
 
   const handleRemoveLogo = async () => {
-    setBusiness((prev) => ({ ...prev, logoUrl: undefined }));
-    await saveStoreProfile(
-      { ...business, logoUrl: undefined },
-      settings
-    );
+    const updatedBusiness = { ...business, logoUrl: undefined };
+    setBusiness(updatedBusiness);
+    await saveStoreProfile(updatedBusiness, settings);
+    if (seller) {
+      saveSellerCatalogToFirestore(seller, {
+        products: [],
+        business: updatedBusiness,
+        settings,
+      }).catch(() => {});
+    }
     setSaveStatus('saved');
     setToastMessage('Logotipo eliminado y cambios guardados.');
     setTimeout(() => setToastMessage(null), 3000);

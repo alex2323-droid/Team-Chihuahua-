@@ -30,34 +30,25 @@ service cloud.firestore {
       allow read: if true;
     }
 
-    // Catalogs Collection: Public read for customers, controlled write
+    // Catalogs Collection: Public read for customers, full seller catalog sync
     match /catalogs/{catalogId} {
       function isValidCatalog(data) {
         return data.keys().hasAll(['id', 'business', 'settings', 'products']) &&
                data.id is string && isValidId(data.id) &&
                data.business is map &&
-               data.business.name is string && data.business.name.size() > 0 && data.business.name.size() <= 100 &&
-               data.business.whatsapp is string && data.business.whatsapp.size() > 0 && data.business.whatsapp.size() <= 30 &&
+               data.business.name is string && data.business.name.size() <= 120 &&
+               data.business.whatsapp is string && data.business.whatsapp.size() <= 50 &&
                data.settings is map &&
                data.products is list && data.products.size() <= 500;
       }
 
-      // Public customers can view individual catalog documents
+      // Public customers and sellers can get individual catalog documents
       allow get: if isValidId(catalogId);
-      // Listing catalogs is prohibited to prevent whole database scraping
       allow list: if false;
 
-      // Create new catalog
-      allow create: if isValidId(catalogId) &&
-                       isValidCatalog(incoming()) &&
-                       incoming().id == catalogId;
-
-      // Update existing catalog
-      allow update: if isValidId(catalogId) &&
-                       isValidCatalog(incoming()) &&
-                       incoming().id == existing().id;
-
-      // Delete catalog
+      // Create or update catalog
+      allow create: if isValidId(catalogId) && isValidCatalog(incoming());
+      allow update: if isValidId(catalogId) && isValidCatalog(incoming());
       allow delete: if isSignedIn();
     }
 

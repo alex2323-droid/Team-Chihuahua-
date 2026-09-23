@@ -116,7 +116,12 @@ export function subscribeToSellerCatalog(
 
   return onSnapshot(
     catalogRef,
+    { includeMetadataChanges: true },
     (snapshot) => {
+      // Ignore local optimistic writes to prevent overwriting active user typing
+      if (snapshot.metadata.hasPendingWrites) {
+        return;
+      }
       if (snapshot.exists()) {
         const data = snapshot.data() as Catalog;
         onUpdate(data);

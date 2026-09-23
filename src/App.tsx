@@ -143,6 +143,7 @@ export default function App() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [isCatalogLoadedForSeller, setIsCatalogLoadedForSeller] = useState(false);
   const isInitialMount = useRef(true);
+  const lastSavedTimestampRef = useRef<number>(Date.now());
 
   // Share Modal / Deployed link state
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
@@ -168,6 +169,7 @@ export default function App() {
     if (!seller || isCustomerView) return;
 
     setSaveStatus('saving');
+    lastSavedTimestampRef.current = Date.now();
     try {
       // 1. Primary Sync: Cloud Firestore (guarantees cross-device availability)
       const firestoreResult = await saveSellerCatalogToFirestore(seller, {
@@ -323,19 +325,23 @@ export default function App() {
         // Step C: Subscribe to Real-Time Cloud Firestore Updates (Live cross-device sync)
         unsubscribeFirestore = subscribeToSellerCatalog(seller.username, (liveData) => {
           if (liveData) {
-            if (Array.isArray(liveData.products) && liveData.products.length > 0) {
-              setProducts(liveData.products);
+            const liveTime = liveData.updatedAt ? new Date(liveData.updatedAt).getTime() : 0;
+            // Only accept remote update if it is strictly from another device and newer
+            if (liveTime > lastSavedTimestampRef.current + 2500) {
+              if (Array.isArray(liveData.products) && liveData.products.length > 0) {
+                setProducts(liveData.products);
+              }
+              if (liveData.business) {
+                setBusiness((prev) => ({ ...prev, ...liveData.business }));
+              }
+              if (liveData.settings) {
+                setSettings((prev) => ({ ...prev, ...liveData.settings }));
+              }
+              if (liveData.id) {
+                setSavedCatalogId(liveData.id);
+              }
+              setSaveStatus('saved');
             }
-            if (liveData.business) {
-              setBusiness((prev) => ({ ...prev, ...liveData.business }));
-            }
-            if (liveData.settings) {
-              setSettings((prev) => ({ ...prev, ...liveData.settings }));
-            }
-            if (liveData.id) {
-              setSavedCatalogId(liveData.id);
-            }
-            setSaveStatus('saved');
           }
         });
       } catch (err) {
