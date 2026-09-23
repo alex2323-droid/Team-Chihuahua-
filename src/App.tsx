@@ -127,9 +127,38 @@ type MobileTab = 'store' | 'upload' | 'products' | 'preview';
 export default function App() {
   const { seller, token, isLoading: isAuthLoading, logout } = useAuth();
 
-  const [business, setBusiness] = useState<BusinessInfo>(DEFAULT_BUSINESS);
-  const [settings, setSettings] = useState<CatalogSettings>(DEFAULT_SETTINGS);
-  const [products, setProducts] = useState<Product[]>(PRESET_PRODUCTS);
+  const [business, setBusiness] = useState<BusinessInfo>(() => {
+    try {
+      const saved = localStorage.getItem('saved_store_business');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object') return parsed;
+      }
+    } catch (e) {}
+    return DEFAULT_BUSINESS;
+  });
+
+  const [settings, setSettings] = useState<CatalogSettings>(() => {
+    try {
+      const saved = localStorage.getItem('saved_catalog_settings');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object') return parsed;
+      }
+    } catch (e) {}
+    return DEFAULT_SETTINGS;
+  });
+
+  const [products, setProducts] = useState<Product[]>(() => {
+    try {
+      const saved = localStorage.getItem('saved_catalog_products');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (e) {}
+    return PRESET_PRODUCTS;
+  });
 
   // App mode states
   const [activeTab, setActiveTab] = useState<'editor' | 'preview'>('editor');
@@ -159,6 +188,17 @@ export default function App() {
     }, 3500);
   };
 
+  // Synchronize products, business, and settings to localStorage continuously
+  useEffect(() => {
+    try {
+      localStorage.setItem('saved_catalog_products', JSON.stringify(products));
+      localStorage.setItem('saved_store_business', JSON.stringify(business));
+      localStorage.setItem('saved_catalog_settings', JSON.stringify(settings));
+    } catch (e) {
+      console.warn('[App] LocalStorage auto-persist notice:', e);
+    }
+  }, [products, business, settings]);
+
   // Helper to persist the seller's catalog in Cloud Firestore and backend
   const syncSellerCatalogToBackend = async (
     targetProducts: Product[],
@@ -166,7 +206,16 @@ export default function App() {
     targetSettings: CatalogSettings,
     customCatalogId?: string
   ) => {
-    if (!seller || isCustomerView) return;
+    if (isCustomerView) return;
+
+    // Immediately persist locally
+    try {
+      localStorage.setItem('saved_catalog_products', JSON.stringify(targetProducts));
+      localStorage.setItem('saved_store_business', JSON.stringify(targetBusiness));
+      localStorage.setItem('saved_catalog_settings', JSON.stringify(targetSettings));
+    } catch (e) {}
+
+    if (!seller) return;
 
     setSaveStatus('saving');
     lastSavedTimestampRef.current = Date.now();
@@ -247,7 +296,8 @@ export default function App() {
     if (params.get('id')) return; // Customer view
 
     if (!seller) {
-      setIsCatalogLoadedForSeller(false);
+      setIsCatalogLoadedForSeller(true);
+      isInitialMount.current = false;
       return;
     }
 
@@ -260,7 +310,7 @@ export default function App() {
         const cloudCatalog = await loadSellerCatalogFromFirestore(seller);
 
         if (cloudCatalog) {
-          if (Array.isArray(cloudCatalog.products) && cloudCatalog.products.length > 0) {
+          if (Array.isArray(cloudCatalog.products)) {
             setProducts(cloudCatalog.products);
           }
           if (cloudCatalog.business) {
@@ -278,7 +328,10 @@ export default function App() {
           }
           setSaveStatus('saved');
         } else {
-          // Step B: Fallback to Backend API if not yet in Firestore
+          // If no cloud catalog document exists yet, immediately create it from existing local products
+          syncSellerCatalogToBackend(products, business, settings);
+
+          // Fallback to Backend API if available
           if (token) {
             try {
               const response = await fetch('/api/seller/catalog', {
@@ -291,7 +344,7 @@ export default function App() {
                 const data = await response.json();
                 if (data.catalog) {
                   const cat = data.catalog;
-                  if (Array.isArray(cat.products) && cat.products.length > 0) {
+                  if (Array.isArray(cat.products)) {
                     setProducts(cat.products);
                   }
                   if (cat.business) {
@@ -307,13 +360,6 @@ export default function App() {
                   if (cat.id) {
                     setSavedCatalogId(cat.id);
                   }
-                  // Save into Cloud Firestore to establish cross-device link
-                  syncSellerCatalogToBackend(
-                    cat.products || PRESET_PRODUCTS,
-                    cat.business || DEFAULT_BUSINESS,
-                    cat.settings || DEFAULT_SETTINGS,
-                    cat.id
-                  );
                 }
               }
             } catch (apiErr) {
@@ -328,7 +374,7 @@ export default function App() {
             const liveTime = liveData.updatedAt ? new Date(liveData.updatedAt).getTime() : 0;
             // Only accept remote update if it is strictly from another device and newer
             if (liveTime > lastSavedTimestampRef.current + 2500) {
-              if (Array.isArray(liveData.products) && liveData.products.length > 0) {
+              if (Array.isArray(liveData.products)) {
                 setProducts(liveData.products);
               }
               if (liveData.business) {
@@ -362,9 +408,9 @@ export default function App() {
     };
   }, [seller?.id, seller?.username, token]);
 
-  // 3. Debounced Auto-Save for changes made in editor (Saves straight to Cloud Firestore)
+  // 3. Debounced Auto-Save for changes made in editor (Saves straight to Cloud Firestore and localStorage)
   useEffect(() => {
-    if (isInitialMount.current || !isCatalogLoadedForSeller || !seller || isCustomerView) {
+    if (isInitialMount.current || isCustomerView) {
       return;
     }
 
@@ -374,7 +420,7 @@ export default function App() {
     }, 600);
 
     return () => clearTimeout(timer);
-  }, [products, business, settings, isCatalogLoadedForSeller]);
+  }, [products, business, settings]);
 
   // Load customer catalog function with Cloud Firestore support
   const loadCatalogFromDb = async (id: string) => {
