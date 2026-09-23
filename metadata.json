@@ -1,0 +1,6 @@
+{
+  "name": "Generador de Catálogos de Productos",
+  "description": "Crea catálogos de venta interactivos y profesionales de forma automática. Sube fotos de tus productos y usa Inteligencia Artificial para escanearlos, sugerir títulos comerciales, generar especificaciones y compilar catálogos modernos con links de compra por WhatsApp.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

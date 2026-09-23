@@ -1,0 +1,52 @@
+@import "tailwindcss";
+
+/* Clean, Print-Ready styles for physical printing and browser Save-to-PDF */
+@media print {
+  /* Hide creator UI, navbar, controls, buttons, device mockup frames, and cart */
+  header,
+  #creator-dashboard-root > header,
+  .no-print,
+  button,
+  input,
+  .fixed,
+  .sticky,
+  [role="dialog"] {
+    display: none !important;
+  }
+
+  body,
+  html {
+    background: #ffffff !important;
+    color: #000000 !important;
+    font-size: 11pt !important;
+  }
+
+  /* Expand catalog container to full page width */
+  main,
+  #catalog-print-root,
+  .max-w-4xl,
+  .max-w-7xl {
+    max-width: 100% !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* Prevent card splitting across pages */
+  .break-inside-avoid,
+  article,
+  [data-product-card] {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+    margin-bottom: 12pt !important;
+    box-shadow: none !important;
+    border: 1px solid #e2e8f0 !important;
+  }
+
+  /* Ensure colors and images are printed crisply */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+}
+

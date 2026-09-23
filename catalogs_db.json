@@ -1,0 +1,232 @@
+{
+  "2K28FNC3": {
+    "id": "2K28FNC3",
+    "business": {
+      "name": "Boutique Bella Vista",
+      "whatsapp": "34600123456",
+      "instagram": "boutique_bellavista",
+      "address": "Calle Mayor 12, Madrid",
+      "paymentMethods": [
+        "Efectivo",
+        "Transferencia Bancaria"
+      ],
+      "additionalInfo": "Envíos a domicilio en 24 horas hábiles. Envíos gratis por compras superiores a €50."
+    },
+    "settings": {
+      "primaryColor": "#111827",
+      "secondaryColor": "#3B82F6",
+      "theme": "light",
+      "currency": "EUR",
+      "layout": "grid",
+      "showSku": true,
+      "showAttributes": true
+    },
+    "products": [
+      {
+        "id": "preset-1",
+        "name": "Zapatillas Deportivas Running Blancas",
+        "price": 65,
+        "imageUrl": "https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=600&auto=format&fit=crop&q=80",
+        "description": "Calzado deportivo de alta resistencia con amortiguación premium. Ideal para asfalto.",
+        "category": "Calzado",
+        "imageAnalysisStatus": "completed",
+        "attributes": {
+          "sku": "RUN-A91B",
+          "colors": [
+            "Blanco",
+            "Rojo"
+          ],
+          "sizes": [
+            "39",
+            "40",
+            "41",
+            "42"
+          ],
+          "brand": "AeroMax",
+          "features": [
+            "Suela antideslizante",
+            "Material transpirable"
+          ],
+          "availability": "Disponible"
+        }
+      },
+      {
+        "id": "preset-2",
+        "name": "Gafas de Sol Clásicas Negras",
+        "price": 24.99,
+        "imageUrl": "https://images.unsplash.com/photo-1572635196237-14b3f281503f?w=600&auto=format&fit=crop&q=80",
+        "description": "Lentes polarizados con protección UV400 completa. Marco ligero y duradero.",
+        "category": "Accesorios",
+        "imageAnalysisStatus": "completed",
+        "attributes": {
+          "sku": "SUN-C10",
+          "colors": [
+            "Negro Brillante",
+            "Mate"
+          ],
+          "sizes": [
+            "Estándar"
+          ],
+          "brand": "SolarLux",
+          "features": [
+            "Protección UV400",
+            "Incluye estuche rígido"
+          ],
+          "availability": "Disponible"
+        }
+      },
+      {
+        "id": "preset-3",
+        "name": "Mochila Urbana Impermeable",
+        "price": 45.5,
+        "imageUrl": "https://images.unsplash.com/photo-1553062407-98eeb64c6a62?w=600&auto=format&fit=crop&q=80",
+        "description": "Compartimento acolchado para laptop de hasta 15.6 pulgadas. Material repelente al agua.",
+        "category": "Accesorios",
+        "imageAnalysisStatus": "completed",
+        "attributes": {
+          "sku": "BAG-W23",
+          "colors": [
+            "Gris Oxford",
+            "Azul Marino"
+          ],
+          "sizes": [
+            "25 Litros"
+          ],
+          "features": [
+            "Puerto de carga USB externo",
+            "Bolsillo antirrobo"
+          ],
+          "availability": "Bajo pedido"
+        }
+      },
+      {
+        "id": "temp-url-1790128105996",
+        "name": "Bandeja Organizadora de Escritorio",
+        "price": 20,
+        "imageUrl": "https://commimg.us.kwcdn.com/goods-detail-image/35b7c2/yeUWmfsNGd/18a34aca2bc74f47aec2aa7c1af94b64.png",
+        "imageAnalysisStatus": "completed",
+        "category": "General",
+        "description": "Optimiza tu espacio de trabajo con esta versátil bandeja organizadora, ideal para mantener tus artículos de oficina ordenados y al alcance de la mano. Su diseño minimalista se adapta perfectamente a cualquier escritorio moderno.",
+        "attributes": {
+          "colors": [
+            "Blanco"
+          ],
+          "sizes": [],
+          "brand": "Importado",
+          "model": "Escritorio-Modular-01",
+          "features": [
+            "Diseño modular",
+            "Ahorro de espacio",
+            "Compartimentos de almacenamiento"
+          ],
+          "sku": "IMP-0001",
+          "availability": "Disponible"
+        }
+      }
+    ],
+    "createdAt": "2026-09-23T01:50:19.669Z"
+  },
+  "TJUFHGH9": {
+    "id": "TJUFHGH9",
+    "business": {
+      "name": "Boutique Bella Vista",
+      "whatsapp": "34600123456",
+      "instagram": "boutique_bellavista",
+      "address": "Calle Mayor 12, Madrid",
+      "paymentMethods": [
+        "Efectivo",
+        "Transferencia Bancaria"
+      ],
+      "additionalInfo": "Envíos a domicilio en 24 horas hábiles. Envíos gratis por compras superiores a €50."
+    },
+    "settings": {
+      "primaryColor": "#111827",
+      "secondaryColor": "#3B82F6",
+      "theme": "light",
+      "currency": "EUR",
+      "layout": "grid",
+      "showSku": true,
+      "showAttributes": true
+    },
+    "products": [
+      {
+        "id": "preset-1",
+        "name": "Zapatillas Deportivas Running Blancas",
+        "price": 65,
+        "imageUrl": "https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=600&auto=format&fit=crop&q=80",
+        "description": "Calzado deportivo de alta resistencia con amortiguación premium. Ideal para asfalto.",
+        "category": "Calzado",
+        "imageAnalysisStatus": "completed",
+        "attributes": {
+          "sku": "RUN-A91B",
+          "colors": [
+            "Blanco",
+            "Rojo"
+          ],
+          "sizes": [
+            "39",
+            "40",
+            "41",
+            "42"
+          ],
+          "brand": "AeroMax",
+          "features": [
+            "Suela antideslizante",
+            "Material transpirable"
+          ],
+          "availability": "Disponible"
+        }
+      },
+      {
+        "id": "preset-2",
+        "name": "Gafas de Sol Clásicas Negras",
+        "price": 24.99,
+        "imageUrl": "https://images.unsplash.com/photo-1572635196237-14b3f281503f?w=600&auto=format&fit=crop&q=80",
+        "description": "Lentes polarizados con protección UV400 completa. Marco ligero y duradero.",
+        "category": "Accesorios",
+        "imageAnalysisStatus": "completed",
+        "attributes": {
+          "sku": "SUN-C10",
+          "colors": [
+            "Negro Brillante",
+            "Mate"
+          ],
+          "sizes": [
+            "Estándar"
+          ],
+          "brand": "SolarLux",
+          "features": [
+            "Protección UV400",
+            "Incluye estuche rígido"
+          ],
+          "availability": "Disponible"
+        }
+      },
+      {
+        "id": "preset-3",
+        "name": "Mochila Urbana Impermeable",
+        "price": 45.5,
+        "imageUrl": "https://images.unsplash.com/photo-1553062407-98eeb64c6a62?w=600&auto=format&fit=crop&q=80",
+        "description": "Compartimento acolchado para laptop de hasta 15.6 pulgadas. Material repelente al agua.",
+        "category": "Accesorios",
+        "imageAnalysisStatus": "completed",
+        "attributes": {
+          "sku": "BAG-W23",
+          "colors": [
+            "Gris Oxford",
+            "Azul Marino"
+          ],
+          "sizes": [
+            "25 Litros"
+          ],
+          "features": [
+            "Puerto de carga USB externo",
+            "Bolsillo antirrobo"
+          ],
+          "availability": "Bajo pedido"
+        }
+      }
+    ],
+    "createdAt": "2026-09-23T01:59:07.210Z"
+  }
+}
